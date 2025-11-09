@@ -1,0 +1,39 @@
+[
+  {
+    "id": "fanbox_123456",
+    "service": "fanbox",
+    "user_id": "123456",
+    "name": "Artist Name",
+    "url": "https://kemono.cr/fanbox/user/123456",
+    "alias": "",
+    "last_date": null,
+    "timer": null,
+    "ignore": false,
+    "completed": false,
+    "config": {},
+    "filter": {}
+  },
+  {
+    "id": "patreon_789012",
+    "service": "patreon",
+    "user_id": "789012",
+    "name": "Another Artist",
+    "url": "https://kemono.cr/patreon/user/789012",
+    "alias": "Custom Alias",
+    "last_date": "2024-01-01T00:00:00",
+    "timer": {
+      "type": "weekly",
+      "time": "02:00",
+      "day": 1
+    },
+    "ignore": false,
+    "completed": false,
+    "config": {
+      "artist_folder_template": "{service}/{alias}",
+      "post_folder_template": "[{published}][{id}] {title}"
+    },
+    "filter": {
+      "exclude_keywords": ["announcement", "poll"]
+    }
+  }
+]

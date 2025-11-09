@@ -1,0 +1,10 @@
+__pycache__/
+bak/
+temp/
+
+data/artists.json
+data/config.json
+data/validation_ignore.json
+cache/
+logs/
+downloads/

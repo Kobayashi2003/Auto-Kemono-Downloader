@@ -1,0 +1,40 @@
+{
+  "data_dir": "data",
+  "cache_dir": "cache",
+  "logs_dir": "logs",
+  "temp_dir": "temp",
+  "download_dir": "downloads",
+  "global_timer": {
+    "type": "daily",
+    "time": "01:00"
+  },
+  "global_filter": {},
+  "max_retries": 3,
+  "retry_delay": 5,
+  "request_timeout": 30,
+  "max_concurrent_artists": 3,
+  "max_concurrent_posts": 5,
+  "max_concurrent_files": 10,
+  "date_format": "%Y.%m.%d",
+  "artist_folder_template": "{service}/{name}",
+  "post_folder_template": "[{published}] {title}",
+  "file_template": "{idx}",
+  "path_template": null,
+  "save_content": true,
+  "save_empty_posts": false,
+  "rename_images_only": true,
+  "image_extensions": [
+    ".jpeg",
+    ".jpe",
+    ".jpg",
+    ".gif",
+    ".webp",
+    ".png"
+  ],
+  "use_proxy": false,
+  "proxy_base_port": 7890,
+  "proxy_num_instances": 10,
+  "clash_exe_path": "",
+  "clash_config_path": "",
+  "proxy_skip_keywords": ["DIRECT", "REJECT"]
+}
