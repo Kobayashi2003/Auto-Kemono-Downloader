@@ -1,0 +1,1 @@
+- 添加对content-length头的cache，在downloader中阻止重复文件的下载

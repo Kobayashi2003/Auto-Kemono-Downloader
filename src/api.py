@@ -148,8 +148,8 @@ class API:
         Download file with optional progress callbacks
 
         Callbacks:
-            on_start(filename, total_size) - Called when download starts
-            on_progress(filename, downloaded, total_size) - Called during download
+            on_start(filename, content_length) - Called when download starts
+            on_progress(filename, downloaded, content_length) - Called during download
             on_complete(filename, success) - Called when download completes/fails
         """
         temp_path = None
@@ -160,19 +160,6 @@ class API:
 
             path = Path(save_path)
             filename = path.name
-
-            # Get content-length with retry (must succeed)
-            content_length = self.get_content_length_until_success(url)
-
-            # Check if file exists and validate size
-            if content_length and path.exists():
-                actual_size = path.stat().st_size
-                if actual_size == content_length:
-                    # File exists and size matches, skip download
-                    if on_complete:
-                        on_complete(filename, True)
-                    return True
-                # If size mismatch, continue to download (will add suffix to avoid overwrite)
 
             # Download to temp file first
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -187,12 +174,22 @@ class API:
             resp = self.session.get(url, cookies=self.cookies, headers=self.HEADERS, proxies=proxies, timeout=60, stream=True)
             resp.raise_for_status()
 
-            # Get file size
-            total_size = int(resp.headers.get('content-length', 0))
+            # Get content-length
+            content_length = int(resp.headers.get('content-length', 0)) or self.get_content_length_until_success(url) or 0
+
+            # Check if file exists and validate size
+            if content_length and path.exists():
+                actual_size = path.stat().st_size
+                if actual_size == content_length:
+                    # File exists and size matches, skip download
+                    if on_complete:
+                        on_complete(filename, True)
+                    return True
+                # If size mismatch, continue to download (will add suffix to avoid overwrite)
 
             # Callback: download started
             if on_start:
-                on_start(filename, total_size)
+                on_start(filename, content_length)
 
             downloaded = 0
             with open(temp_path, 'wb') as f:
@@ -212,7 +209,7 @@ class API:
 
                         # Callback: progress update
                         if on_progress:
-                            on_progress(filename, downloaded, total_size)
+                            on_progress(filename, downloaded, content_length)
 
             # Rename temp file to final name
             # If file exists (size mismatch or no content-length), add suffix
