@@ -1,7 +1,5 @@
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -301,7 +299,8 @@ class Downloader:
         # Check if we need to update
         cached_posts = self.cache.load_posts(artist.id)
         has_new = self.cache.has_new(artist.id, current_count)
-        needs_update = has_new or len(cached_posts) != current_count
+        has_lost = len(cached_posts) != current_count
+        needs_update = has_new or has_lost
 
         if not needs_update:
             self.logger.artist_no_new_posts(artist.display_name())

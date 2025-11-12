@@ -113,8 +113,10 @@ $ python main.py
 
 | Command              | Description                                       |
 | -------------------- | ------------------------------------------------- |
-| `update-cache-basic` | Update basic post information                     |
-| `update-cache-full`  | Update full post information                      |
+| `update-cache-basic` | Update basic post information for one artist      |
+| `update-cache-full`  | Update full post information for one artist       |
+| `update-all-basic`   | Update basic post information for all artist      |
+| `update-all-full`    | Update full post information for all artist       |
 | `reset`              | Reset download status for one artist (support `last_date` parameter) |
 | `reset-all`          | Reset download status for all artists             |
 | `list-incomplete`    | Show incomplete downloads for one artist          |
@@ -132,7 +134,7 @@ $ python main.py
 | ------------------  | ----------------------------- |
 | `config-artist`     | Edit artist-specific settings |
 | `config-global`     | Edit global configuration     |
-| `config-validation` | Show configuration validation |
+| `config-validation` | Edit validation configuration |
 
 
 ### Validation

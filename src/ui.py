@@ -394,26 +394,17 @@ def cmd_add_artist(ctx: CLIContext):
 
 def cmd_remove_artist(ctx: CLIContext):
     """Remove artist"""
-    artists = ctx.storage.get_artists()
-    if not artists:
-        print("No artists found")
+    artist = select_artist(ctx)
+    if not artist:
         return
 
-    print("\nArtists:")
-    for i, artist in enumerate(artists, 1):
-        print(f"{i}. {artist.display_name()} ({artist.id})")
-
-    try:
-        idx = int(input("\nSelect number to remove: ")) - 1
-        if 0 <= idx < len(artists):
-            artist = artists[idx]
-            ctx.storage.remove_artist(artist.id)
-            ctx.logger.info(f"Removed artist: {artist.display_name()}")
-            print(f"Removed: {artist.display_name()}")
-        else:
-            print("Invalid selection")
-    except ValueError:
-        print("Invalid input")
+    confirm = input(f"\nAre you sure you want to remove {artist.display_name()}? (yes/no): ").strip().lower()
+    if confirm != "yes":
+        print("Cancelled")
+        return
+    ctx.storage.remove_artist(artist.id)
+    ctx.logger.info(f"Removed artist: {artist.display_name()}")
+    print(f"Removed: {artist.display_name()}")
 
 
 def cmd_list_artists(ctx: CLIContext, sort_by='name'):

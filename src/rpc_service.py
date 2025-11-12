@@ -1,58 +1,48 @@
+import inspect
+import threading
+from contextlib import redirect_stdout, redirect_stderr
+from io import StringIO
+
 import rpyc
 from rpyc.utils.server import ThreadedServer
-import threading
-import sys
-from io import StringIO
-from contextlib import redirect_stdout, redirect_stderr
+from prompt_toolkit import prompt
 
 
 class DownloaderService(rpyc.Service):
-    """RPC service for remote command execution"""
+    """RPC service - supports only non-interactive commands"""
 
-    # Class variable to store CLI context
     ctx = None
+    ALLOWED_COMMANDS = {'help', 'list', 'tasks'}
 
     def exposed_execute_command(self, cmd_input: str) -> dict:
-        """Execute a command and return the result
-
-        Args:
-            cmd_input: Command string (e.g., "list:sort_by=status")
-
-        Returns:
-            dict with 'output' or 'error' key
-        """
+        """Execute command and return result dict"""
         if not self.ctx:
             return {"error": "Service not initialized"}
 
         try:
             from .ui import parse_command, COMMAND_MAP
-            import inspect
 
-            # Parse command
             command, params = parse_command(cmd_input)
 
-            # Get handler
+            if command not in self.ALLOWED_COMMANDS:
+                allowed = ', '.join(sorted(self.ALLOWED_COMMANDS))
+                return {"error": f"Command '{command}' is not supported in RPC mode. Only {allowed} are available."}
+
             handler = COMMAND_MAP.get(command)
             if not handler:
                 return {"error": f"Unknown command: {command}"}
 
-            # Check parameters
             sig = inspect.signature(handler)
             handler_params = set(sig.parameters.keys()) - {'ctx'}
 
             if params:
                 valid_params = {k: v for k, v in params.items() if k in handler_params}
                 invalid_params = set(params.keys()) - handler_params
-
-                if invalid_params:
-                    warning = f"Warning: Command '{command}' doesn't support parameters: {', '.join(invalid_params)}\n"
-                else:
-                    warning = ""
+                warning = f"Warning: '{command}' doesn't support parameters: {', '.join(invalid_params)}\n" if invalid_params else ""
             else:
                 valid_params = {}
                 warning = ""
 
-            # Capture output
             output_buffer = StringIO()
             error_buffer = StringIO()
 
@@ -74,7 +64,7 @@ class DownloaderService(rpyc.Service):
             return {"error": f"Failed to execute command: {str(e)}"}
 
     def exposed_get_status(self) -> dict:
-        """Get current status"""
+        """Get scheduler status"""
         if not self.ctx:
             return {"error": "Service not initialized"}
 
@@ -92,7 +82,6 @@ class DownloaderService(rpyc.Service):
         """Health check"""
         return "pong"
 
-
 class RPCServer:
     """RPC server wrapper"""
 
@@ -103,25 +92,19 @@ class RPCServer:
         self.thread = None
 
     def start(self):
-        """Start RPC server in background thread"""
+        """Start server in background thread"""
         DownloaderService.ctx = self.ctx
-
         self.server = ThreadedServer(
             DownloaderService,
             port=self.port,
-            protocol_config={
-                "allow_public_attrs": True,
-                "allow_pickle": True,
-            }
+            protocol_config={"allow_public_attrs": True, "allow_pickle": True}
         )
-
         self.thread = threading.Thread(target=self.server.start, daemon=True)
         self.thread.start()
-
         print(f"[RPC Server] Started on port {self.port}")
 
     def stop(self):
-        """Stop RPC server"""
+        """Stop server"""
         if self.server:
             self.server.close()
 
@@ -134,17 +117,13 @@ class RPCClient:
         self.conn = None
 
     def connect(self) -> bool:
-        """Try to connect to RPC server"""
+        """Connect to RPC server"""
         try:
             self.conn = rpyc.connect(
                 "localhost",
                 self.port,
-                config={
-                    "allow_public_attrs": True,
-                    "allow_pickle": True,
-                }
+                config={"allow_public_attrs": True, "allow_pickle": True}
             )
-            # Test connection
             self.conn.root.ping()
             return True
         except Exception:
@@ -154,7 +133,6 @@ class RPCClient:
         """Execute command on remote instance"""
         if not self.conn:
             return {"error": "Not connected"}
-
         try:
             return self.conn.root.execute_command(cmd_input)
         except Exception as e:
@@ -164,7 +142,6 @@ class RPCClient:
         """Get status from remote instance"""
         if not self.conn:
             return {"error": "Not connected"}
-
         try:
             return self.conn.root.get_status()
         except Exception as e:
@@ -177,13 +154,13 @@ class RPCClient:
 
     def run_interactive(self):
         """Run interactive client mode"""
-        from prompt_toolkit import prompt
-        from .ui import CommandCompleter, COMMAND_MAP
+        from .ui import CommandCompleter
 
         print("[Client Mode] Connected to existing instance")
-        print("Type 'help' for available commands, 'exit' to quit")
+        print("Available commands: help, list, tasks, exit")
+        print("Note: Interactive commands are not supported in RPC mode\n")
 
-        completer = CommandCompleter(COMMAND_MAP.keys())
+        completer = CommandCompleter(['help', 'list', 'tasks', 'exit'])
 
         while True:
             try:
@@ -196,19 +173,14 @@ class RPCClient:
                     print("Disconnecting...")
                     break
 
-                # Execute command remotely
                 result = self.execute_command(cmd_input)
 
-                # Display result
                 if "error" in result:
                     print(f"Error: {result['error']}")
                 elif "output" in result:
                     print(result['output'], end='')
 
-            except KeyboardInterrupt:
-                print("\nDisconnecting...")
-                break
-            except EOFError:
+            except (KeyboardInterrupt, EOFError):
                 print("\nDisconnecting...")
                 break
             except Exception as e:
