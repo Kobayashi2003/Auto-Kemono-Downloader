@@ -3,8 +3,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-# import requests
-from . import requests_compat as requests
+import requests
 
 from .proxy_pool import ProxyPool
 

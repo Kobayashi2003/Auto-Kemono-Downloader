@@ -278,6 +278,8 @@ def cmd_help(ctx: CLIContext = None):
     print("  check-until            - Check until specific date")
     print("  check-range            - Check date range")
     print("  check-all              - Check all artists")
+    print("  check-undone           - Check an artist with undone posts")
+    print("  check-all-undone       - Check all artists with undone posts")
     print()
     print("Cache Management:")
     print("  update-cache-basic     - Update basic post info")
@@ -286,8 +288,8 @@ def cmd_help(ctx: CLIContext = None):
     print("  update-all-full        - Update all full")
     print("  reset                  - Reset posts after last_date")
     print("  reset-all              - Reset all posts")
-    print("  list-incomplete        - List incomplete posts")
-    print("  list-all-incomplete    - List all incomplete")
+    print("  list-undone            - List undone posts")
+    print("  list-all-undone        - List all undone")
     print("  dedupe                 - Remove duplicate posts for an artist")
     print("  dedupe-all             - Remove duplicate posts for all artists")
     print()
@@ -498,6 +500,37 @@ def cmd_check_all_artists(ctx: CLIContext):
     print(f"\nQueued {added} artists for download")
     print("Use 'tasks' to view queue status")
 
+def cmd_check_undone(ctx: CLIContext):
+    """Check artist with undone posts"""
+    artist = select_artist(ctx, filter_func=lambda a: len(ctx.cache.get_undone(a.id)) > 0)
+    if not artist:
+        return
+
+    undone_posts = ctx.cache.get_undone(artist.id)
+    if not undone_posts:
+        print(f"\n{artist.display_name()}: No undone posts to check")
+        return
+
+    print(f"\nQueued: {artist.display_name()} with {len(undone_posts)} undone posts")
+    ctx.scheduler.queue_manual(artist.id)
+
+def cmd_check_all_undone(ctx: CLIContext):
+    """Check all artists with undone posts"""
+    artists = ctx.storage.get_artists()
+    if not artists:
+        print("No artists found")
+        return
+
+    active_artists = [a for a in artists if not a.ignore and not a.completed]
+    artists_with_undone = [a for a in active_artists if len(ctx.cache.get_undone(a.id)) > 0]
+
+    if not artists_with_undone:
+        print("No active artists with undone posts to check")
+        return
+
+    added = ctx.scheduler.queue_batch([a.id for a in artists_with_undone])
+    print(f"\nQueued {added} artists with undone posts for download")
+    print("Use 'tasks' to view queue status")
 
 def cmd_check_from_date(ctx: CLIContext):
     """Check from date"""
@@ -798,21 +831,21 @@ def cmd_reset_all_artists(ctx: CLIContext):
     print(f"\nTotal: {total_reset} posts reset")
 
 
-def cmd_list_incomplete(ctx: CLIContext):
-    """List incomplete posts"""
+def cmd_list_undone(ctx: CLIContext):
+    """List undone posts"""
     artist = select_artist(ctx)
     if not artist:
         return
 
-    incomplete_posts = ctx.cache.get_incomplete(artist.id)
-    if not incomplete_posts:
-        print(f"\n{artist.display_name()}: No incomplete posts")
+    undone_posts = ctx.cache.get_undone(artist.id)
+    if not undone_posts:
+        print(f"\n{artist.display_name()}: No undone posts")
         return
 
-    print(f"\n{artist.display_name()} - Incomplete Posts ({len(incomplete_posts)}):")
+    print(f"\n{artist.display_name()} - Undone Posts ({len(undone_posts)}):")
     print("-" * 80)
 
-    for post in incomplete_posts:
+    for post in undone_posts:
         status = "Not done" if not post.done else f"Failed ({len(post.failed_files)} files)"
         print(f"\nPost ID: {post.id}")
         print(f"Title: {post.title}")
@@ -825,34 +858,34 @@ def cmd_list_incomplete(ctx: CLIContext):
     print()
 
 
-def cmd_list_all_incomplete(ctx: CLIContext):
-    """List all incomplete posts"""
+def cmd_list_all_undone(ctx: CLIContext):
+    """List all undone posts"""
     artists = ctx.storage.get_artists()
     if not artists:
         print("No artists found")
         return
 
-    total_incomplete = 0
-    artists_with_incomplete = []
+    total_undone = 0
+    artists_with_undone = []
 
     for artist in artists:
-        incomplete_posts = ctx.cache.get_incomplete(artist.id)
-        if incomplete_posts:
-            artists_with_incomplete.append((artist, incomplete_posts))
-            total_incomplete += len(incomplete_posts)
+        undone_posts = ctx.cache.get_undone(artist.id)
+        if undone_posts:
+            artists_with_undone.append((artist, undone_posts))
+            total_undone += len(undone_posts)
 
-    if not artists_with_incomplete:
-        print("\nNo incomplete posts found")
+    if not artists_with_undone:
+        print("\nNo undone posts found")
         return
 
-    print(f"\nIncomplete Posts Summary ({total_incomplete} posts across {len(artists_with_incomplete)} artists):")
+    print(f"\Undone Posts Summary ({total_undone} posts across {len(artists_with_undone)} artists):")
     print("=" * 80)
 
-    for artist, incomplete_posts in artists_with_incomplete:
-        print(f"\n{artist.display_name()} - {len(incomplete_posts)} incomplete posts:")
+    for artist, undone_posts in artists_with_undone:
+        print(f"\n{artist.display_name()} - {len(undone_posts)} undone posts:")
         print("-" * 80)
 
-        for post in incomplete_posts:
+        for post in undone_posts:
             status = "Not done" if not post.done else f"Failed ({len(post.failed_files)} files)"
             print(f"  [{post.published[:10]}] {post.title[:50]} - {status}")
             if post.failed_files and len(post.failed_files) <= 3:
@@ -1680,6 +1713,8 @@ COMMAND_MAP = {
     'check-until': cmd_check_until_date,
     'check-range': cmd_check_date_range,
     'check-all': cmd_check_all_artists,
+    'check-undone': cmd_check_undone,
+    'check-all-undone': cmd_check_all_undone,
     'update-cache-basic': cmd_update_cache_basic,
     'update-all-basic': cmd_update_all_basic,
     'update-cache-full': cmd_update_cache_full,
@@ -1690,8 +1725,8 @@ COMMAND_MAP = {
     'migrate-files': cmd_migrate_files,
     'reset': cmd_reset_artist,
     'reset-all': cmd_reset_all_artists,
-    'list-incomplete': cmd_list_incomplete,
-    'list-all-incomplete': cmd_list_all_incomplete,
+    'list-undone': cmd_list_undone,
+    'list-all-undone': cmd_list_all_undone,
     'dedupe': cmd_dedupe_artist,
     'dedupe-all': cmd_dedupe_all_artists,
     'tasks': cmd_tasks,

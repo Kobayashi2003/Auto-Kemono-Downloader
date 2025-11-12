@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .models import Artist, Post, Profile
+from .models import Post, Profile
 
 
 class Cache:
@@ -146,8 +146,8 @@ class Cache:
 
         return reset_count
 
-    def get_incomplete(self, artist_id: str) -> List[Post]:
-        """Get incomplete posts (not done or has failed files)"""
+    def get_undone(self, artist_id: str) -> List[Post]:
+        """Get undone posts (not done or has failed files)"""
         posts = self.load_posts(artist_id)
         return [post for post in posts if not post.done or post.failed_files]
 
