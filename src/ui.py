@@ -500,9 +500,10 @@ def cmd_check_all_artists(ctx: CLIContext):
     print(f"\nQueued {added} artists for download")
     print("Use 'tasks' to view queue status")
 
+
 def cmd_check_undone(ctx: CLIContext):
     """Check artist with undone posts"""
-    artist = select_artist(ctx, filter_func=lambda a: len(ctx.cache.get_undone(a.id)) > 0)
+    artist = select_artist(ctx, filter_func=lambda a: len(ctx.cache.get_undone(a.id)) > 0 or ctx.cache.stats(a.id)['total'] == 0)
     if not artist:
         return
 
@@ -514,6 +515,7 @@ def cmd_check_undone(ctx: CLIContext):
     print(f"\nQueued: {artist.display_name()} with {len(undone_posts)} undone posts")
     ctx.scheduler.queue_manual(artist.id)
 
+
 def cmd_check_all_undone(ctx: CLIContext):
     """Check all artists with undone posts"""
     artists = ctx.storage.get_artists()
@@ -522,7 +524,7 @@ def cmd_check_all_undone(ctx: CLIContext):
         return
 
     active_artists = [a for a in artists if not a.ignore and not a.completed]
-    artists_with_undone = [a for a in active_artists if len(ctx.cache.get_undone(a.id)) > 0]
+    artists_with_undone = [a for a in active_artists if len(ctx.cache.get_undone(a.id)) > 0 or ctx.cache.stats(a.id)['total'] == 0]
 
     if not artists_with_undone:
         print("No active artists with undone posts to check")
@@ -531,6 +533,7 @@ def cmd_check_all_undone(ctx: CLIContext):
     added = ctx.scheduler.queue_batch([a.id for a in artists_with_undone])
     print(f"\nQueued {added} artists with undone posts for download")
     print("Use 'tasks' to view queue status")
+
 
 def cmd_check_from_date(ctx: CLIContext):
     """Check from date"""
@@ -878,7 +881,7 @@ def cmd_list_all_undone(ctx: CLIContext):
         print("\nNo undone posts found")
         return
 
-    print(f"\Undone Posts Summary ({total_undone} posts across {len(artists_with_undone)} artists):")
+    print(f"Undone Posts Summary ({total_undone} posts across {len(artists_with_undone)} artists):")
     print("=" * 80)
 
     for artist, undone_posts in artists_with_undone:

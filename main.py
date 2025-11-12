@@ -1,7 +1,12 @@
 import os
 import signal
 
-from src import API, CLI, Cache, Downloader, Logger, Migrator, Notifier, Scheduler, Storage, Validator, ClashProxyPool, NullProxyPool, RPCServer, RPCClient
+from src import (
+    API, CLI, Cache, Downloader, Logger,
+    Migrator, Notifier, Scheduler, Storage,
+    Validator, ClashProxyPool, NullProxyPool,
+    RPCServer, RPCClient
+)
 
 
 # Global state for interrupt handling

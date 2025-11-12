@@ -83,23 +83,6 @@ class Cache:
                 break
         self.save_posts(artist_id, posts)
 
-    def get_undone(self, artist_id: str) -> List[Post]:
-        posts = self.load_posts(artist_id)
-        return [post for post in posts if not post.done]
-
-    def mark_old_done(self, artist_id: str, before_date: str):
-        posts = self.load_posts(artist_id)
-        for post in posts:
-            if post.published <= before_date:
-                post.done = True
-        self.save_posts(artist_id, posts)
-
-    def has_new(self, artist_id: str, current_count: int) -> bool:
-        profile = self.load_profile(artist_id)
-        if not profile:
-            return True
-        return current_count > profile.post_count
-
     def stats(self, artist_id: str) -> Dict:
         posts = self.load_posts(artist_id)
         total = len(posts)
@@ -112,6 +95,24 @@ class Cache:
             'pending': total - done,
             'failed': failed
         }
+
+    def has_new(self, artist_id: str, current_count: int) -> bool:
+        profile = self.load_profile(artist_id)
+        if not profile:
+            return True
+        return current_count > profile.post_count
+
+    def get_undone(self, artist_id: str) -> List[Post]:
+        """Get undone posts (not done or has failed files)"""
+        posts = self.load_posts(artist_id)
+        return [post for post in posts if not post.done or post.failed_files]
+
+    def mark_old_done(self, artist_id: str, before_date: str):
+        posts = self.load_posts(artist_id)
+        for post in posts:
+            if post.published <= before_date:
+                post.done = True
+        self.save_posts(artist_id, posts)
 
     def reset_after_date(self, artist_id: str, after_date: str = None) -> int:
         """Reset posts to undone
@@ -145,11 +146,6 @@ class Cache:
             self.save_posts(artist_id, posts)
 
         return reset_count
-
-    def get_undone(self, artist_id: str) -> List[Post]:
-        """Get undone posts (not done or has failed files)"""
-        posts = self.load_posts(artist_id)
-        return [post for post in posts if not post.done or post.failed_files]
 
     def deduplicate_posts(self, artist_id: str) -> int:
         """Remove duplicate posts by ID, keeping the first occurrence
