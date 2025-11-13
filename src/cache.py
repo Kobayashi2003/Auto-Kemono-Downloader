@@ -83,6 +83,9 @@ class Cache:
                 break
         self.save_posts(artist_id, posts)
 
+    def reset_post(self, artist_id: str, post_id: str):
+        self.update_post(artist_id, post_id, done=False, failed_files=[])
+
     def stats(self, artist_id: str) -> Dict:
         posts = self.load_posts(artist_id)
         total = len(posts)

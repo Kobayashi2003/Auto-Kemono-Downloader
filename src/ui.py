@@ -1,5 +1,6 @@
 import inspect
 import os
+from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
 from typing import List, Optional
@@ -14,10 +15,11 @@ from .downloader import Downloader
 from .editor import edit_json
 from .logger import Logger
 from .migrator import Migrator
-from .models import Artist, MigrationConfig, ValidationLevel
+from .models import Artist, MigrationConfig, ValidationLevel, ArtistFolderParams, PostFolderParams
 from .scheduler import Scheduler
 from .storage import Storage
 from .validator import Validator
+from .formatter import Formatter
 
 
 # ============================================================================
@@ -215,6 +217,7 @@ def prompt_selection(ctx: CLIContext, filter_func=None) -> Optional[Artist]:
     try:
         user_input = prompt("> ", completer=ArtistCompleter(ctx, filter_func)).strip()
         if not user_input:
+            print("No input provided")
             return None
 
         exact, new_filter = find_artist(user_input, ctx, filter_func)
@@ -286,6 +289,8 @@ def cmd_help(ctx: CLIContext = None):
     print("  update-all-basic       - Update all basic")
     print("  update-cache-full      - Update full post info")
     print("  update-all-full        - Update all full")
+    print("  clean-post-folders     - Move invalid post folders to quarantine")
+    print("  clean-all-post-folders - Move invalid post folders for all artists")
     print("  reset                  - Reset posts after last_date")
     print("  reset-all              - Reset all posts")
     print("  list-undone            - List undone posts")
@@ -834,9 +839,427 @@ def cmd_reset_all_artists(ctx: CLIContext):
     print(f"\nTotal: {total_reset} posts reset")
 
 
+def cmd_clean_post_folders(ctx: CLIContext, quarantine_name: str = "Invalid", dry: str = "false"):
+    """Move invalid post folders for a selected artist into a quarantine folder.
+
+    Parameters (optional via command params):
+    - quarantine_name: name of the quarantine folder under the artist directory (default: Invalid)
+    - dry: 'true' or 'false' (default: 'false')
+    """
+    artist = select_artist(ctx)
+    if not artist:
+        return
+
+    config = ctx.storage.load_config()
+
+    # Resolve artist directory using current templates
+    artist_params = ArtistFolderParams(
+        service=artist.service,
+        name=artist.name,
+        alias=artist.alias,
+        user_id=artist.user_id,
+        last_date=artist.last_date or "",
+    )
+    artist_folder = Formatter.format_artist_folder(artist_params, artist.config.get('artist_folder_template', config.artist_folder_template))
+    artist_dir = Path(config.download_dir) / artist_folder
+
+    if not artist_dir.exists():
+        print(f"Artist directory does not exist: {artist_dir}")
+        return
+
+    # Build expected post folder names from cached posts
+    posts = ctx.cache.load_posts(artist.id)
+    if not posts:
+        print(f"\n{artist.display_name()}: No cached posts found")
+        return
+
+    post_template = artist.config.get('post_folder_template', config.post_folder_template)
+    expected = set()
+    for p in posts:
+        pparams = PostFolderParams(
+            id=p.id,
+            user=p.user,
+            service=p.service,
+            title=p.title,
+            published=p.published,
+        )
+        folder = Formatter.format_post_folder(pparams, post_template, config.date_format)
+        expected.add(str(folder))
+
+    # Enumerate direct subdirectories under artist directory
+    subdirs = [p for p in artist_dir.iterdir() if p.is_dir()]
+    candidates = [p for p in subdirs if p.name != quarantine_name]
+    invalid = [p for p in candidates if p.name not in expected]
+
+    print(f"\n{artist.display_name()} - Clean Post Folders")
+    print("-" * 80)
+    print(f"Artist dir: {artist_dir}")
+    print(f"Quarantine: {artist_dir / quarantine_name}")
+    print(f"Expected post folders: {len(expected)}")
+    print(f"Found subfolders: {len(candidates)}")
+    print(f"Invalid (to move): {len(invalid)}")
+
+    # Show preview
+    preview = 20
+    for p in invalid[:preview]:
+        print(f"  - {p.name}")
+    if len(invalid) > preview:
+        print(f"  ... and {len(invalid) - preview} more")
+
+    dry_mode = str(dry).strip().lower() == 'true'
+    if dry_mode:
+        print("\nDry run: no changes made.")
+        return
+
+    quarantine_dir = artist_dir / quarantine_name
+    quarantine_dir.mkdir(parents=True, exist_ok=True)
+
+    def unique_destination(base: Path, name: str) -> Path:
+        target = base / name
+        if not target.exists():
+            return target
+        stem = target.stem
+        suffix = target.suffix
+        i = 1
+        while True:
+            candidate = base / f"{stem}-dup{i}{suffix}"
+            if not candidate.exists():
+                return candidate
+            i += 1
+
+    import shutil
+    moved = 0
+    for src in invalid:
+        dest = unique_destination(quarantine_dir, src.name)
+        shutil.move(str(src), str(dest))
+        moved += 1
+
+    print(f"\nMoved {moved} folders to: {quarantine_dir}")
+
+
+def cmd_clean_all_post_folders(ctx: CLIContext, quarantine_name: str = "Invalid", dry: str = "false"):
+    """Move invalid post folders for all artists into each artist's quarantine folder.
+
+    Parameters (optional via command params):
+    - quarantine_name: name of the quarantine folder under each artist directory (default: Invalid)
+    - dry: 'true' or 'false' (default: 'false')
+    """
+    artists = ctx.storage.get_artists()
+    if not artists:
+        print("No artists found")
+        return
+
+    config = ctx.storage.load_config()
+    dry_mode = str(dry).strip().lower() == 'true'
+
+    import shutil
+
+    total_invalid = 0
+    total_moved = 0
+    processed = 0
+
+    print(f"\nClean Post Folders for All Artists")
+    print("-" * 80)
+
+    for artist in artists:
+        # Resolve artist dir
+        artist_params = ArtistFolderParams(
+            service=artist.service,
+            name=artist.name,
+            alias=artist.alias,
+            user_id=artist.user_id,
+            last_date=artist.last_date or "",
+        )
+        artist_folder = Formatter.format_artist_folder(
+            artist_params,
+            artist.config.get('artist_folder_template', config.artist_folder_template)
+        )
+        artist_dir = Path(config.download_dir) / artist_folder
+
+        if not artist_dir.exists():
+            continue
+
+        # Expected post folder names from cached posts
+        posts = ctx.cache.load_posts(artist.id)
+        if not posts:
+            continue
+
+        post_template = artist.config.get('post_folder_template', config.post_folder_template)
+        expected = set()
+        for p in posts:
+            pparams = PostFolderParams(
+                id=p.id,
+                user=p.user,
+                service=p.service,
+                title=p.title,
+                published=p.published,
+            )
+            folder = Formatter.format_post_folder(pparams, post_template, config.date_format)
+            expected.add(str(folder))
+
+        subdirs = [p for p in artist_dir.iterdir() if p.is_dir()]
+        candidates = [p for p in subdirs if p.name != quarantine_name]
+        invalid = [p for p in candidates if p.name not in expected]
+
+        if not invalid:
+            processed += 1
+            continue
+
+        total_invalid += len(invalid)
+        print(f"{artist.display_name()} [{artist.id}]: invalid {len(invalid)}")
+        for p in invalid[:10]:
+            print(f"  - {p.name}")
+        if len(invalid) > 10:
+            print(f"  ... and {len(invalid) - 10} more")
+
+        if not dry_mode:
+            quarantine_dir = artist_dir / quarantine_name
+            quarantine_dir.mkdir(parents=True, exist_ok=True)
+
+            def unique_destination(base: Path, name: str) -> Path:
+                target = base / name
+                if not target.exists():
+                    return target
+                stem = target.stem
+                suffix = target.suffix
+                i = 1
+                while True:
+                    candidate = base / f"{stem}-dup{i}{suffix}"
+                    if not candidate.exists():
+                        return candidate
+                    i += 1
+
+            for src in invalid:
+                dest = unique_destination(quarantine_dir, src.name)
+                shutil.move(str(src), str(dest))
+                total_moved += 1
+
+        processed += 1
+
+    print("-" * 80)
+    print(f"Artists processed: {processed}")
+    print(f"Invalid folders found: {total_invalid}")
+    if dry_mode:
+        print("Dry run: no changes made.")
+    else:
+        print(f"Moved: {total_moved}")
+
+
+def cmd_reset_conflicts(ctx: CLIContext):
+    """Reset posts based on path conflicts for a selected artist
+
+    Level behavior:
+    1. Artist-level conflicts -> reset ALL posts for all conflicting artists
+    2. Post-level conflicts   -> reset ONLY conflicting posts
+    3. File-level conflicts   -> reset posts containing conflicting files
+    """
+    artist = select_artist(ctx)
+    if not artist:
+        return
+
+    posts = ctx.cache.load_posts(artist.id)
+    if not posts:
+        print(f"\n{artist.display_name()}: No cached posts found")
+        print("Run 'update-cache-basic' or 'update-cache-full' first to fetch posts")
+        return
+
+    config = ctx.storage.load_config()
+
+    print(f"\n{artist.display_name()} - Reset by Conflicts")
+    print("-" * 80)
+    print("\nValidation level:")
+    print("1. Artist folder only")
+    print("2. Artist + Post folders")
+    print("3. Full paths (Artist + Post + Files) [default]")
+    level_input = input("Select level (1-3, default=3): ").strip()
+
+    if level_input == "1":
+        level = ValidationLevel(artist_unique=True, post_unique=False, file_unique=False)
+    elif level_input == "2":
+        level = ValidationLevel(artist_unique=True, post_unique=True, file_unique=False)
+    else:
+        level = ValidationLevel(artist_unique=True, post_unique=True, file_unique=True)
+
+    validation_data = Validator.build_validation_data([(artist, posts)], config)
+    if not validation_data.artists:
+        print("No files found in posts")
+        return
+
+    conflicts, filtered_count = ctx.validator.validate_full_paths(validation_data, level)
+    if filtered_count > 0:
+        print(f"Filtered {filtered_count} ignored conflicts")
+
+    if not conflicts:
+        print("\n✓ No conflicts found! Nothing to reset.")
+        return
+
+    # Collect reset targets
+    reset_all_artists = set()         # artist_ids to reset all posts
+    reset_posts = set()               # (artist_id, post_id)
+
+    if level_input == "1":
+        # Artist-level: ids are artist_ids
+        for _, ids in conflicts:
+            for aid in ids:
+                reset_all_artists.add(aid)
+    elif level_input == "2":
+        # Post-level: ids like "artistId:postId"
+        for _, ids in conflicts:
+            for id_str in ids:
+                parts = id_str.split(":", 1)
+                if len(parts) == 2:
+                    reset_posts.add((parts[0], parts[1]))
+    else:
+        # File-level: ids like "artistId:postId:fileName"
+        for _, ids in conflicts:
+            for id_str in ids:
+                parts = id_str.split(":", 2)
+                if len(parts) >= 2:
+                    reset_posts.add((parts[0], parts[1]))
+
+    # If artist-level selected, resetting all posts supersedes per-post resets
+    if reset_all_artists:
+        reset_posts = {ap for ap in reset_posts if ap[0] not in reset_all_artists}
+
+    print("\nPlanned resets:")
+    print(f"  Artists (all posts): {len(reset_all_artists)}")
+    print(f"  Individual posts:   {len(reset_posts)}")
+
+    confirm = input("Proceed with reset? (yes/no): ").strip().lower()
+    if confirm != "yes":
+        print("Cancelled")
+        return
+
+    # Execute resets
+    total_posts_reset = 0
+    # Reset all posts for conflicting artists
+    for aid in sorted(reset_all_artists):
+        count = ctx.cache.reset_after_date(aid, None)
+        if count > 0:
+            total_posts_reset += count
+            # Try to log with name if available
+            try:
+                a_obj = next((a for a in ctx.storage.get_artists() if a.id == aid), None)
+                name = a_obj.display_name() if a_obj else aid
+            except Exception:
+                name = aid
+            print(f"{name}: reset {count} posts (all)")
+
+    # Reset specific posts
+    for aid, pid in sorted(reset_posts):
+        ctx.cache.reset_post(aid, pid)
+        total_posts_reset += 1
+
+    print(f"\nTotal posts reset: {total_posts_reset}")
+
+
+def cmd_reset_all_conflicts(ctx: CLIContext):
+    """Reset posts based on path conflicts across all artists
+
+    Level behavior:
+    1. Artist-level conflicts -> reset ALL posts for all conflicting artists
+    2. Post-level conflicts   -> reset ONLY conflicting posts
+    3. File-level conflicts   -> reset posts containing conflicting files
+    """
+    artists = ctx.storage.get_artists()
+    if not artists:
+        print("No artists found")
+        return
+
+    config = ctx.storage.load_config()
+
+    print(f"\nReset by Conflicts for All Artists")
+    print("-" * 80)
+    print("\nValidation level:")
+    print("1. Artist folder only")
+    print("2. Artist + Post folders")
+    print("3. Full paths (Artist + Post + Files) [default]")
+    level_input = input("Select level (1-3, default=3): ").strip()
+
+    if level_input == "1":
+        level = ValidationLevel(artist_unique=True, post_unique=False, file_unique=False)
+    elif level_input == "2":
+        level = ValidationLevel(artist_unique=True, post_unique=True, file_unique=False)
+    else:
+        level = ValidationLevel(artist_unique=True, post_unique=True, file_unique=True)
+
+    artists_with_posts = []
+    for a in artists:
+        if a.ignore:
+            continue
+        posts = ctx.cache.load_posts(a.id)
+        if posts:
+            artists_with_posts.append((a, posts))
+
+    if not artists_with_posts:
+        print("\nNo files found in cached posts")
+        print("Run 'update-all-basic' or 'update-all-full' first to fetch posts")
+        return
+
+    validation_data = Validator.build_validation_data(artists_with_posts, config)
+    conflicts, filtered_count = ctx.validator.validate_full_paths(validation_data, level)
+    if filtered_count > 0:
+        print(f"Filtered {filtered_count} ignored conflicts")
+
+    if not conflicts:
+        print("\n✓ No conflicts found! Nothing to reset.")
+        return
+
+    reset_all_artists = set()
+    reset_posts = set()
+
+    if level_input == "1":
+        for _, ids in conflicts:
+            for aid in ids:
+                reset_all_artists.add(aid)
+    elif level_input == "2":
+        for _, ids in conflicts:
+            for id_str in ids:
+                parts = id_str.split(":", 1)
+                if len(parts) == 2:
+                    reset_posts.add((parts[0], parts[1]))
+    else:
+        for _, ids in conflicts:
+            for id_str in ids:
+                parts = id_str.split(":", 2)
+                if len(parts) >= 2:
+                    reset_posts.add((parts[0], parts[1]))
+
+    if reset_all_artists:
+        reset_posts = {ap for ap in reset_posts if ap[0] not in reset_all_artists}
+
+    print("\nPlanned resets:")
+    print(f"  Artists (all posts): {len(reset_all_artists)}")
+    print(f"  Individual posts:   {len(reset_posts)}")
+
+    confirm = input("Proceed with reset? (yes/no): ").strip().lower()
+    if confirm != "yes":
+        print("Cancelled")
+        return
+
+    total_posts_reset = 0
+    artist_map = {a.id: a for a, _ in artists_with_posts}
+
+    # Reset artists (all posts)
+    for aid in sorted(reset_all_artists):
+        count = ctx.cache.reset_after_date(aid, None)
+        if count > 0:
+            total_posts_reset += count
+            a_obj = artist_map.get(aid)
+            name = a_obj.display_name() if a_obj else aid
+            print(f"{name}: reset {count} posts (all)")
+
+    # Reset individual posts
+    for aid, pid in sorted(reset_posts):
+        ctx.cache.reset_post(aid, pid)
+        total_posts_reset += 1
+
+    print(f"\nTotal posts reset: {total_posts_reset}")
+
+
 def cmd_list_undone(ctx: CLIContext):
     """List undone posts"""
-    artist = select_artist(ctx)
+    artist = select_artist(ctx, filter_func=lambda a: len(ctx.cache.get_undone(a.id)) > 0 or ctx.cache.stats(a.id)['total'] == 0)
     if not artist:
         return
 
@@ -1722,6 +2145,10 @@ COMMAND_MAP = {
     'update-all-basic': cmd_update_all_basic,
     'update-cache-full': cmd_update_cache_full,
     'update-all-full': cmd_update_all_full,
+    'clean-post-folders': cmd_clean_post_folders,
+    'clean-all-post-folders': cmd_clean_all_post_folders,
+    'reset-conflicts': cmd_reset_conflicts,
+    'reset-all-conflicts': cmd_reset_all_conflicts,
     'validate': cmd_validate_artist,
     'validate-all': cmd_validate_all_artists,
     'migrate-posts': cmd_migrate_posts,
