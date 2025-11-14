@@ -508,7 +508,7 @@ def cmd_check_all_artists(ctx: CLIContext):
 
 def cmd_check_undone(ctx: CLIContext):
     """Check artist with undone posts"""
-    artist = select_artist(ctx, filter_func=lambda a: len(ctx.cache.get_undone(a.id)) > 0 or ctx.cache.stats(a.id)['total'] == 0)
+    artist = select_artist(ctx, filter_func=lambda a: (len(ctx.cache.get_undone(a.id)) > 0 or ctx.cache.stats(a.id)['total'] == 0) and not a.completed and not a.ignore)
     if not artist:
         return
 

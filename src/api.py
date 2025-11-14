@@ -1,3 +1,4 @@
+import uuid
 import threading
 import time
 from pathlib import Path
@@ -163,11 +164,7 @@ class API:
 
             # Download to temp file first
             path.parent.mkdir(parents=True, exist_ok=True)
-            temp_path = path.with_suffix(path.suffix + '.tmp')
-
-            # Delete existing temp file if any (from previous failed download)
-            if temp_path.exists():
-                temp_path.unlink()
+            temp_path = path.parent / f"{path.stem}_{uuid.uuid4().hex}{path.suffix}.tmp"
 
             # Start actual download
             proxies = self.proxy_pool.get_proxy() if self.proxy_pool else None
