@@ -105,26 +105,23 @@ class ClashProxyPool(ProxyPool):
         atexit.register(self.cleanup)
         self._initialized = True
 
-    def _log(self, message: str):
-        if self.logger:
-            self.logger.info(message)
-        else:
-            print(f"[ProxyPool] {message}")
+    # No internal wrapper; use self.logger directly for events
 
     def _setup(self):
-        self._log(f"Setting up {self.num_instances} Clash instances...")
+        self.logger.proxy_pool_setup(instances=self.num_instances)
 
         try:
             with open(self.clash_config, 'r', encoding='utf-8') as f:
                 base_config = yaml.safe_load(f)
         except Exception as e:
-            self._log(f"Failed to load config: {e}")
+            self.logger.proxy_pool_load_config_failed(error=str(e), level='warning')
             super().__init__([])
             return
 
         available_proxies = self._get_available_proxies(base_config)
         if len(available_proxies) < self.num_instances:
             self.num_instances = min(self.num_instances, len(available_proxies))
+        self.logger.proxy_pool_available_proxies(available=len(available_proxies), using=self.num_instances)
 
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -187,7 +184,7 @@ class ClashProxyPool(ProxyPool):
 
             return config_file
         except Exception as e:
-            self._log(f"Failed to create config {index}: {e}")
+            self.logger.proxy_pool_create_config_failed(index=index, error=str(e), level='warning')
             return None
 
     def _start_instance(self, config_file: Path, index: int) -> bool:
@@ -201,13 +198,13 @@ class ClashProxyPool(ProxyPool):
             self.processes.append(process)
             return True
         except Exception as e:
-            self._log(f"Failed to start instance {index}: {e}")
+            self.logger.proxy_pool_start_instance_failed(index=index, error=str(e), level='warning')
             return False
 
     def cleanup(self):
         if not self.processes:
             return
-        self._log(f"Stopping {len(self.processes)} Clash instances...")
+        self.logger.proxy_pool_stopping(count=len(self.processes))
         for process in self.processes:
             try:
                 process.terminate()
@@ -218,7 +215,7 @@ class ClashProxyPool(ProxyPool):
                 except:
                     pass
         self.processes.clear()
-        self._log("All instances stopped")
+        self.logger.proxy_pool_stopped_all()
 
     def __del__(self):
         self.cleanup()

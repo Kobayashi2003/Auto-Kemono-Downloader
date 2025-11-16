@@ -5,13 +5,15 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .models import Post, Profile
+from .logger import Logger
 
 
 class Cache:
-    def __init__(self, cache_dir: str):
+    def __init__(self, cache_dir: str, logger: Logger):
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(exist_ok=True)
         self.lock = threading.Lock()
+        self.logger = logger
 
     def _profile_path(self, artist_id: str) -> Path:
         return self.cache_dir / f"{artist_id}_profile.json"
@@ -85,6 +87,7 @@ class Cache:
 
     def reset_post(self, artist_id: str, post_id: str):
         self.update_post(artist_id, post_id, done=False, failed_files=[])
+        self.logger.cache_reset_post(artist_id=artist_id, post_id=post_id)
 
     def stats(self, artist_id: str) -> Dict:
         posts = self.load_posts(artist_id)
@@ -147,6 +150,7 @@ class Cache:
 
         if reset_count > 0:
             self.save_posts(artist_id, posts)
+            self.logger.cache_reset_after_date(artist_id=artist_id, after_date=after_date or '', count=reset_count)
 
         return reset_count
 
@@ -173,5 +177,6 @@ class Cache:
 
         if duplicate_count > 0:
             self.save_posts(artist_id, unique_posts)
+            self.logger.cache_deduplicate_posts(artist_id=artist_id, removed=duplicate_count)
 
         return duplicate_count

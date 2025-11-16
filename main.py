@@ -51,7 +51,7 @@ def main():
     storage = Storage("data")
     config = storage.load_config()
     logger = Logger(config.logs_dir)
-    cache = Cache(config.cache_dir)
+    cache = Cache(config.cache_dir, logger=logger)
 
     # Proxy configuration
     proxy_pool = None
@@ -94,7 +94,8 @@ def main():
         storage=storage,
         downloader=downloader,
         global_timer=config.global_timer,
-        max_workers=config.max_concurrent_artists
+        max_workers=config.max_concurrent_artists,
+        logger=logger
     )
     migrator = Migrator(
         storage=storage,
@@ -106,7 +107,6 @@ def main():
     cli = CLI(
         storage=storage,
         scheduler=scheduler,
-        logger=logger,
         cache=cache,
         api=api,
         downloader=downloader,

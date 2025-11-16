@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 from .models import DownloadTask, QueueStatus, TaskStatus, TaskType
 from .storage import Storage
 from .downloader import Downloader
+from .logger import Logger
 
 
 class Scheduler:
@@ -15,6 +16,7 @@ class Scheduler:
         self,
         storage: Storage,
         downloader: Downloader,
+        logger: Logger,
         global_timer: Optional[Dict],
         max_workers: int = 3,
     ):
@@ -22,6 +24,7 @@ class Scheduler:
         self.downloader = downloader
         self.global_timer = global_timer
         self.max_workers = max_workers
+        self.logger = logger
         self.running = False
         self.scheduler_thread = None
         self.next_runs = {}
@@ -42,6 +45,7 @@ class Scheduler:
         self.executor = ThreadPoolExecutor(max_workers=self.max_workers)
         self.scheduler_thread = threading.Thread(target=self._scheduler_loop, daemon=True)
         self.scheduler_thread.start()
+        self.logger.scheduler_started(max_workers=self.max_workers)
 
     def stop(self):
         self.running = False
@@ -50,6 +54,7 @@ class Scheduler:
         if self.executor:
             # self.executor.shutdown(wait=True)
             self.executor.shutdown(wait=False, cancel_futures=True)
+        self.logger.scheduler_stopped()
 
     def cancel_all_tasks(self):
         """Cancel all queued and running tasks"""
@@ -64,6 +69,7 @@ class Scheduler:
                     break
             self.queued_tasks.clear()
             active_count = len(self.active_tasks)
+        self.logger.scheduler_cancel_all_requested(active_running=active_count)
 
         # Step 2: Stop downloader (sets stop flag)
         self.downloader.stop()
@@ -85,7 +91,7 @@ class Scheduler:
             with self.lock:
                 remaining = len(self.active_tasks)
                 if remaining > 0:
-                    print(f"Warning: {remaining} tasks still running after {max_wait}s timeout")
+                    self.logger.scheduler_cancel_timeout_warning(remaining=remaining, timeout_s=max_wait)
 
         # Step 4: Resume downloader for future tasks
         self.downloader.resume()
@@ -104,14 +110,17 @@ class Scheduler:
             task = DownloadTask(artist_id, None, None, TaskType.MANUAL)
             if self._add_task(task):
                 added += 1
+        self.logger.scheduler_batch_queued(count=added, requested=len(artist_ids))
         return added
 
     def _add_task(self, task: DownloadTask) -> bool:
         with self.lock:
             if task in self.queued_tasks:
+                self.logger.scheduler_task_duplicate(artist_id=task.artist_id, type=task.task_type.name)
                 return False
             self.queued_tasks.add(task)
             self.task_queue.put(task)
+            self.logger.scheduler_task_queued(artist_id=task.artist_id, type=task.task_type.name)
             return True
 
     def get_queue_status(self) -> QueueStatus:
@@ -137,7 +146,7 @@ class Scheduler:
                 self._process_queue()
                 time.sleep(1)
             except Exception as e:
-                print(f"Scheduler error: {e}")
+                self.logger.scheduler_error(error=str(e))
                 time.sleep(5)
 
     def _process_queue(self):
@@ -155,10 +164,13 @@ class Scheduler:
 
         future = self.executor.submit(self._execute_task, task)
         future.add_done_callback(lambda f: self._task_completed(task, f))
+        self.logger.scheduler_task_started(artist_id=task.artist_id, type=task.task_type.name, active=len(self.active_tasks), max_workers=self.max_workers)
 
     def _execute_task(self, task: DownloadTask):
         task.status = TaskStatus.RUNNING
         task.started_at = datetime.now()
+        self.logger.scheduler_task_execute_begin(artist_id=task.artist_id, type=task.task_type.name,
+                                                 from_date=task.from_date or '', until_date=task.until_date or '')
 
         try:
             artist = self.storage.get_artist(task.artist_id)
@@ -170,11 +182,13 @@ class Scheduler:
 
             task.status = TaskStatus.COMPLETED
             task.result = result
+            self.logger.scheduler_task_execute_success(artist_id=task.artist_id)
             return result
 
         except Exception as e:
             task.status = TaskStatus.FAILED
             task.error = str(e)
+            self.logger.scheduler_task_execute_failed(artist_id=task.artist_id, error=str(e))
             raise
 
         finally:
@@ -186,6 +200,11 @@ class Scheduler:
             self.completed_tasks.append(task)
             if len(self.completed_tasks) > self.max_history:
                 self.completed_tasks.pop(0)
+        elapsed = ''
+        if task.started_at and task.finished_at:
+            seconds = (task.finished_at - task.started_at).seconds
+            elapsed = seconds
+        self.logger.scheduler_task_completed(artist_id=task.artist_id, status=task.status.name, elapsed_s=elapsed)
 
     def _check_scheduled_tasks(self):
         artists = self.storage.get_artists()
@@ -200,6 +219,7 @@ class Scheduler:
             if self._should_run(artist.id, timer):
                 task = DownloadTask(artist.id, None, None, TaskType.SCHEDULED)
                 self._add_task(task)
+                self.logger.scheduler_task_scheduled(artist_id=artist.id)
 
     def _should_run(self, artist_id: str, timer: Dict) -> bool:
         now = datetime.now()

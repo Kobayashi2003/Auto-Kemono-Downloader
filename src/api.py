@@ -1,6 +1,6 @@
-import uuid
-import threading
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -52,9 +52,9 @@ class API:
         try:
             resp = self.session.get(self.BASE_URL, headers=self.INIT_HEADERS, timeout=10)
             self.cookies = resp.cookies.get_dict()
-            self.logger.session_initialized(len(self.cookies))
+            self.logger.api_session_initialized(cookies=len(self.cookies))
         except Exception as e:
-            self.logger.session_init_failed(str(e))
+            self.logger.api_session_init_failed(error=str(e), level='warning')
 
     def stop(self):
         """Stop all ongoing requests and close session"""
@@ -63,12 +63,14 @@ class API:
             self.session.close()
         except:
             pass
+        self.logger.api_session_stopped()
 
     def resume(self):
         """Resume after cancel - reinitialize session"""
         self._stop_flag.clear()
         self.session = requests.Session()
         self._init()
+        self.logger.api_session_resumed()
 
     # ==================== Utility Methods ====================
 
@@ -94,7 +96,7 @@ class API:
                     raise InterruptedError("Request cancelled")
 
                 # Network errors - retry with delay
-                self.logger.network_error(error_msg, str(e), retry_delay)
+                self.logger.api_network_error(operation=error_msg, error=str(e), retry_delay=retry_delay, level='warning')
                 time.sleep(retry_delay)
             except Exception as e:
                 # Other errors - don't retry, raise immediately
@@ -164,7 +166,14 @@ class API:
 
             # Download to temp file first
             path.parent.mkdir(parents=True, exist_ok=True)
-            temp_path = path.parent / f"{path.stem}_{uuid.uuid4().hex}{path.suffix}.tmp"
+            temp_path = path.with_suffix(path.suffix + '.tmp')
+
+            # Delete existing temp file if any (from previous failed download)
+            while temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except:
+                    time.sleep(0.1)
 
             # Start actual download
             proxies = self.proxy_pool.get_proxy() if self.proxy_pool else None
@@ -300,8 +309,6 @@ class API:
 
     def get_all_posts(self, service: str, user_id: str) -> List[Dict]:
         """Fetch all posts for an artist with retry logic (concurrent page fetching)"""
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
         # Get profile to know total post count
         profile = self.get_profile_until_success(service, user_id)
         post_count = profile['post_count']

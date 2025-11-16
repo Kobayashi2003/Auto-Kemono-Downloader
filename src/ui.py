@@ -13,7 +13,6 @@ from .api import API
 from .cache import Cache
 from .downloader import Downloader
 from .editor import edit_json
-from .logger import Logger
 from .migrator import Migrator
 from .models import Artist, MigrationConfig, ValidationLevel, ArtistFolderParams, PostFolderParams
 from .scheduler import Scheduler
@@ -29,9 +28,8 @@ from .formatter import Formatter
 class CLIContext:
     """CLI context containing all dependencies"""
 
-    def __init__(self, storage: Storage, scheduler: Scheduler, logger: Logger,
-                 cache: Cache, api: API, downloader: Downloader, migrator: Migrator, validator: Validator):
-        self.logger = logger
+    def __init__(self, storage: Storage, scheduler: Scheduler, cache: Cache, api: API,
+                 downloader: Downloader, migrator: Migrator, validator: Validator):
         self.api = api
         self.cache = cache
         self.storage = storage
@@ -393,7 +391,7 @@ def cmd_add_artist(ctx: CLIContext):
     )
 
     ctx.storage.save_artist(artist)
-    ctx.logger.info(f"Added artist: {artist.display_name()}")
+
     print(f"Added: {artist.display_name()}")
     if last_date:
         print(f"Posts before {last_date} will be skipped")
@@ -410,7 +408,7 @@ def cmd_remove_artist(ctx: CLIContext):
         print("Cancelled")
         return
     ctx.storage.remove_artist(artist.id)
-    ctx.logger.info(f"Removed artist: {artist.display_name()}")
+
     print(f"Removed: {artist.display_name()}")
 
 
@@ -795,8 +793,6 @@ def cmd_reset_artist(ctx: CLIContext, last_date: str = ""):
         count = ctx.cache.reset_after_date(artist.id, last_date)
         print(f"Reset {count} posts to undone")
 
-    if count > 0:
-        ctx.logger.info(f"{artist.display_name()}: Reset {count} posts to undone")
 
 
 def cmd_reset_all_artists(ctx: CLIContext):
@@ -825,14 +821,14 @@ def cmd_reset_all_artists(ctx: CLIContext):
     for artist in artists_with_date:
         count = ctx.cache.reset_after_date(artist.id, artist.last_date)
         if count > 0:
-            ctx.logger.info(f"{artist.display_name()}: Reset {count} posts")
+
             print(f"{artist.display_name()}: {count} posts")
             total_reset += count
 
     for artist in artists_without_date:
         count = ctx.cache.reset_after_date(artist.id, None)
         if count > 0:
-            ctx.logger.info(f"{artist.display_name()}: Reset {count} posts (all)")
+
             print(f"{artist.display_name()}: {count} posts (all)")
             total_reset += count
 
@@ -1344,7 +1340,7 @@ def cmd_dedupe_artist(ctx: CLIContext):
         posts_after = ctx.cache.load_posts(artist.id)
         print(f"✗ Found and removed {duplicate_count} duplicate posts")
         print(f"Total posts after: {len(posts_after)}")
-        ctx.logger.info(f"{artist.display_name()}: Removed {duplicate_count} duplicate posts")
+
 
     print()
 
@@ -1380,7 +1376,7 @@ def cmd_dedupe_all_artists(ctx: CLIContext):
 
         for artist, duplicate_count in artists_with_duplicates:
             print(f"  {artist.display_name()}: {duplicate_count} duplicates removed")
-            ctx.logger.info(f"{artist.display_name()}: Removed {duplicate_count} duplicate posts")
+
 
         print(f"\n{'='*80}")
         print(f"Total duplicates removed: {total_duplicates}")
@@ -2117,7 +2113,7 @@ def cmd_exit(ctx: CLIContext):
     print("\nShutting down...")
     ctx.downloader.stop()
     ctx.scheduler.stop()
-    ctx.logger.info("Shutdown complete")
+
     os._exit(0)
 
 
@@ -2241,9 +2237,9 @@ def run_cli(ctx: CLIContext):
 # ============================================================================
 
 class CLI:
-    def __init__(self, storage: Storage, scheduler: Scheduler, logger: Logger,
+    def __init__(self, storage: Storage, scheduler: Scheduler,
                  cache: Cache, api: API, downloader: Downloader, migrator: Migrator, validator: Validator):
-        self.ctx = CLIContext(storage, scheduler, logger, cache, api, downloader, migrator, validator)
+        self.ctx = CLIContext(storage, scheduler, cache, api, downloader, migrator, validator)
 
     def run(self):
         """Run CLI"""

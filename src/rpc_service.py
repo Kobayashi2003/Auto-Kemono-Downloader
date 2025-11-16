@@ -82,6 +82,7 @@ class DownloaderService(rpyc.Service):
         """Health check"""
         return "pong"
 
+
 class RPCServer:
     """RPC server wrapper"""
 

@@ -1,4 +1,5 @@
 import logging
+import functools
 from pathlib import Path
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -33,6 +34,98 @@ class Logger:
             console_handler.setFormatter(formatter)
             self.logger.addHandler(console_handler)
 
+    # ==================== Standardized Event Logging ====================
+
+    def _normalize(self, value) -> str:
+        """Normalize message parts to a compact single-line string."""
+        try:
+            text = str(value)
+        except Exception:
+            text = repr(value)
+        # Replace newlines and compress spaces
+        text = text.replace('\n', ' ').replace('\r', ' ')
+        while '  ' in text:
+            text = text.replace('  ', ' ')
+        return text.strip()
+
+    def _emit(self, level: str, module: str, action: str, message: str = ""):
+        """Emit a standardized log line with module and action.
+
+        Format: "[MODULE] action - message"
+        """
+        module_tag = module.strip().upper() if module else "APP"
+        action_name = action.strip() if action else "event"
+        msg = f"[{module_tag}] {action_name}"
+        if message:
+            msg = f"{msg} - {self._normalize(message)}"
+
+        lvl = level.lower()
+        if lvl == 'error':
+            self.logger.error(msg)
+        elif lvl == 'warning' or lvl == 'warn':
+            self.logger.warning(msg)
+        elif lvl == 'debug':
+            self.logger.debug(msg)
+        else:
+            self.logger.info(msg)
+
+    def event(self, level: str = 'info', name: str | None = None):
+        """Decorator to log function calls with module name automatically.
+
+        Usage:
+            @logger.event(level='info')
+            def some_function(...):
+                ...
+
+        The module is derived from func.__module__ (last segment). The action
+        defaults to the function's name, or can be overridden via 'name'.
+        """
+        def decorator(func):
+            module = (func.__module__ or '').split('.')[-1] or 'app'
+            action = name or func.__name__
+
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                # Log function entry
+                self._emit(level, module, action, "call")
+                return func(*args, **kwargs)
+
+            return wrapper
+
+        return decorator
+
+    def __getattr__(self, attr: str):
+        """Dynamic event functions by naming convention: module_action(...)
+
+        Enforces the prefix 'module_' to keep naming consistent. Example:
+            logger.downloader_artist_skipped(artist_name="Alice")
+
+        You can pass a positional message string or keyword details. Optional
+        keyword 'level' overrides the level (info|warning|error|debug).
+        """
+        if '_' not in attr:
+            # Enforce the naming rule to keep logs consistent
+            raise AttributeError(
+                f"Logger event '{attr}' must be named as 'module_action'."
+            )
+
+        module, action = attr.split('_', 1)
+
+        def _event(*args, **kwargs):
+            level = kwargs.pop('level', 'info')
+            # Build message from positional text or structured kwargs
+            message = None
+            if args:
+                message = ' '.join(self._normalize(a) for a in args)
+            if kwargs:
+                # Append structured fields if provided
+                fields = ', '.join(f"{k}={self._normalize(v)}" for k, v in kwargs.items())
+                message = f"{message + ' | ' if message else ''}{fields}" if fields else (message or '')
+
+            self._emit(level, module, action, message or '')
+
+        return _event
+
     # ==================== Basic Logging Methods ====================
 
     def info(self, msg: str):
@@ -46,103 +139,3 @@ class Logger:
 
     def debug(self, msg: str):
         self.logger.debug(msg)
-
-    # ==================== Artist Level Messages ====================
-
-    # Status messages
-    def artist_resumed(self, artist_name: str):
-        """Artist was resumed from paused state"""
-        self.info(f"Resumed: {artist_name}")
-
-    def artist_no_new_posts(self, artist_name: str):
-        """No new posts detected for artist"""
-        self.info(f"{artist_name}: No new posts")
-
-    def artist_no_posts(self, artist_name: str, reason: str = "No posts found"):
-        """No posts to process"""
-        self.info(f"{artist_name}: {reason}")
-
-    def artist_failed(self, artist_name: str, error: str):
-        """Artist processing failed"""
-        self.error(f"{artist_name} failed: {error}")
-
-    def artist_skipped(self, artist_name: str):
-        """Artist skipped (marked as completed)"""
-        self.info(f"{artist_name}: Skipped (marked as completed)")
-
-    # Basic cache operations
-    def artist_updating_cache(self, artist_name: str):
-        """Updating basic cache for artist"""
-        self.info(f"{artist_name}: Updating cache (new posts detected)")
-
-    def artist_cached(self, artist_name: str, total: int, new: int):
-        """Basic cache updated for artist"""
-        self.info(f"{artist_name}: Cached {total} posts, {new} new")
-
-    # Full cache operations
-    def artist_updating_full(self, artist_name: str, count: int):
-        """Updating full post information"""
-        self.info(f"{artist_name}: Updating full info for {count} posts")
-
-    def artist_full_cached(self, artist_name: str, updated: int):
-        """Full post information cached"""
-        self.info(f"{artist_name}: Cached full info for {updated} posts")
-
-    # Download operations
-    def artist_processing_posts(self, artist_name: str, count: int):
-        """Starting to process posts"""
-        self.info(f"{artist_name}: Processing {count} posts")
-
-    def artist_completed(self, artist_name: str, succeeded: int, failed: int):
-        """Artist processing completed"""
-        self.info(f"{artist_name}: Completed - {succeeded} succeeded, {failed} failed")
-
-    def artist_downloaded(self, artist_name: str, posts_count: int):
-        """Artist download summary"""
-        self.info(f"{artist_name}: {posts_count} posts downloaded")
-
-    def artist_updated_last_date(self, artist_name: str, last_date: str):
-        """Updated last_date for artist"""
-        self.info(f"{artist_name}: Updated last_date to {last_date}")
-
-    # ==================== Post Level Messages ====================
-
-    def post_processing(self, index: int, total: int, title: str, file_count: int):
-        """Processing a post"""
-        self.info(f"[{index}/{total}] {title[:40]} ({file_count} files)")
-
-    def post_success(self, downloaded: int, total: int):
-        """Post downloaded successfully"""
-        self.info(f"  ✓ Downloaded {downloaded}/{total} files")
-
-    def post_failed(self, failed: int, total: int):
-        """Post download failed"""
-        self.info(f"  ✗ Failed {failed}/{total} files")
-
-    def post_error(self, post_id: str, error: str):
-        """Post processing error"""
-        self.error(f"Post {post_id} failed with error: {error}")
-
-    # ==================== File Level Messages ====================
-
-    def file_success(self, filename: str):
-        """File downloaded successfully"""
-        self.info(f"    ✓ {filename}")
-
-    def file_failed(self, filename: str, error: str):
-        """File download failed"""
-        self.error(f"    ✗ {filename} - {error}")
-
-    # ==================== Network & Retry Messages ====================
-
-    def network_error(self, operation: str, error: str, retry_delay: int):
-        """Network error occurred, will retry"""
-        self.warning(f"Network error during {operation}: {error}, retrying in {retry_delay}s...")
-
-    def session_initialized(self, cookie_count: int):
-        """API session initialized"""
-        self.info(f"Session initialized: {cookie_count} cookies")
-
-    def session_init_failed(self, error: str):
-        """API session initialization failed"""
-        self.warning(f"Session init failed: {error}")

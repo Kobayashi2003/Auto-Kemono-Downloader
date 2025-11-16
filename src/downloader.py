@@ -41,9 +41,12 @@ class Downloader:
             if self._stop_flag.is_set():
                 return DownloadArtistResult.skipped(artist.id)
 
-            # Skip if artist is marked as completed
-            if artist.completed:
-                self.logger.artist_skipped(artist.display_name())
+            # Skip if artist is marked as completed or ignore
+            if artist.completed or artist.ignore:
+                self.logger.downloader_artist_skipped(
+                    artist=artist.display_name(),
+                    status='completed' if artist.completed else 'ignored'
+                )
                 return DownloadArtistResult.skipped(artist.id)
 
             # Update cache if there are new posts
@@ -71,7 +74,11 @@ class Downloader:
             if posts_to_process:
                 posts_result = self.download_posts(artist, posts_to_process)
             else:
-                self.logger.artist_no_posts(artist.display_name(), no_posts_msg)
+                self.logger.downloader_no_posts(
+                    artist=artist.display_name(),
+                    mode='range' if (from_date or until_date) else 'normal',
+                    reason=no_posts_msg
+                )
                 posts_result = DownloadPostsResult.empty()
 
             # Update last_date after processing (only increase, never decrease)
@@ -79,10 +86,14 @@ class Downloader:
             if new_last_date and new_last_date > (artist.last_date or ""):
                 artist.last_date = new_last_date
                 self.storage.save_artist(artist)
-                self.logger.artist_updated_last_date(artist.display_name(), new_last_date)
+                self.logger.downloader_last_date_updated(
+                    artist=artist.display_name(), last_date=new_last_date
+                )
 
             if posts_result.posts_downloaded > 0:
-                self.logger.artist_downloaded(artist.display_name(), posts_result.posts_downloaded)
+                self.logger.downloader_posts_downloaded(
+                    artist=artist.display_name(), count=posts_result.posts_downloaded
+                )
 
             return DownloadArtistResult(
                 artist_id=artist.id,
@@ -93,12 +104,12 @@ class Downloader:
             )
 
         except Exception as e:
-            self.logger.artist_failed(artist.display_name(), str(e))
+            self.logger.downloader_artist_failed(artist=artist.display_name(), error=str(e), level='error')
             return DownloadArtistResult.failed(artist.id)
 
     def download_posts(self, artist: Artist, posts: List[Post]) -> DownloadPostsResult:
         """Download multiple posts concurrently"""
-        self.logger.artist_processing_posts(artist.display_name(), len(posts))
+        self.logger.downloader_processing_posts(artist=artist.display_name(), count=len(posts))
         self.notifier.notify_artist_start(artist.display_name(), len(posts))
 
         posts_downloaded = 0
@@ -132,7 +143,9 @@ class Downloader:
                 files = Utils.extract_files(post)
                 file_count = len(files)
 
-                self.logger.post_processing(idx, len(posts), post.title, file_count)
+                self.logger.downloader_post_processing(
+                    index=idx, total=len(posts), title=post.title[:60], files=file_count
+                )
 
                 post_result = self.download_post(artist, post)
 
@@ -142,14 +155,18 @@ class Downloader:
                     content_to_save = post.content if post.content != "" else None
                     self.cache.update_post(artist.id, post.id, True, [], content_to_save)
                     if file_count > 0:
-                        self.logger.post_success(post_result.files_downloaded, file_count)
+                        self.logger.downloader_post_success(
+                            post_id=post.id, downloaded=post_result.files_downloaded, total=file_count
+                        )
                     return (True, post_result)
                 else:
-                    self.logger.post_failed(post_result.files_failed, file_count)
+                    self.logger.downloader_post_failed(
+                        post_id=post.id, failed=post_result.files_failed, total=file_count, level='warning'
+                    )
                     return (False, post_result)
 
             except Exception as e:
-                self.logger.post_error(post.id, str(e))
+                self.logger.downloader_post_error(post_id=post.id, error=str(e), level='error')
                 return (False, DownloadPostResult.failed(artist.service, post.id))
 
         with ThreadPoolExecutor(max_workers=self.config.max_concurrent_posts) as executor:
@@ -164,7 +181,9 @@ class Downloader:
                     else:
                         failed_post_results.append(result)
 
-        self.logger.artist_completed(artist.display_name(), posts_downloaded, len(failed_post_results))
+        self.logger.downloader_artist_completed(
+            artist=artist.display_name(), succeeded=posts_downloaded, failed=len(failed_post_results)
+        )
         self.notifier.notify_artist_complete(artist.display_name(), posts_downloaded, len(failed_post_results))
 
         return DownloadPostsResult(
@@ -251,10 +270,10 @@ class Downloader:
                     on_progress=self.notifier.on_download_progress,
                     on_complete=self.notifier.on_download_complete
                 )
-                self.logger.file_success(file_name)
+                self.logger.downloader_file_success(file=file_name)
                 return (True, file_name)
             except Exception as e:
-                self.logger.file_failed(file.get("name", "unknown"), str(e))
+                self.logger.downloader_file_failed(file=file.get("name", "unknown"), error=str(e), level='error')
                 return (False, file_name)
 
         with ThreadPoolExecutor(max_workers=self.config.max_concurrent_files) as executor:
@@ -288,9 +307,12 @@ class Downloader:
         if self._stop_flag.is_set():
             return False
 
-        # Skip if artist is marked as completed
-        if artist.completed:
-            self.logger.artist_skipped(artist.display_name())
+        # Skip if artist is marked as completed or ignore
+        if artist.completed or artist.ignore:
+            self.logger.downloader_artist_skipped(
+                artist=artist.display_name(),
+                status='completed' if artist.completed else 'ignored'
+            )
             return False
 
         profile_data = self.api.get_profile_until_success(artist.service, artist.user_id)
@@ -303,10 +325,10 @@ class Downloader:
         needs_update = has_new or has_lost
 
         if not needs_update:
-            self.logger.artist_no_new_posts(artist.display_name())
+            self.logger.downloader_no_new_posts(artist=artist.display_name())
             return False
 
-        self.logger.artist_updating_cache(artist.display_name())
+        self.logger.downloader_updating_cache(artist=artist.display_name())
         self.cache.save_profile(artist.id, profile_data)
 
         # Load existing posts to preserve status
@@ -350,7 +372,7 @@ class Downloader:
             merged_posts.append(new_post)
 
         self.cache.save_posts(artist.id, merged_posts)
-        self.logger.artist_cached(artist.display_name(), len(merged_posts), new_count)
+        self.logger.downloader_cached(artist=artist.display_name(), total=len(merged_posts), new=new_count)
         return True
 
     def update_posts_full(self, artist: Artist) -> int:
@@ -362,9 +384,12 @@ class Downloader:
         if self._stop_flag.is_set():
             return 0
 
-        # Skip if artist is marked as completed
-        if artist.completed:
-            self.logger.artist_skipped(artist.display_name())
+        # Skip if artist is marked as completed or ignore
+        if artist.completed or artist.ignore:
+            self.logger.downloader_artist_skipped(
+                artist=artist.display_name(),
+                status='completed' if artist.completed else 'ignored'
+            )
             return 0
 
         # First, update basic post list
@@ -374,10 +399,10 @@ class Downloader:
         posts = self.cache.load_posts(artist.id)
 
         if not posts:
-            self.logger.artist_no_posts(artist.display_name())
+            self.logger.downloader_no_posts(artist=artist.display_name())
             return 0
 
-        self.logger.artist_updating_full(artist.display_name(), len(posts))
+        self.logger.downloader_updating_full(artist=artist.display_name(), count=len(posts))
 
         # Filter posts that need updating
         posts_to_update = [
@@ -386,7 +411,7 @@ class Downloader:
         ]
 
         if not posts_to_update:
-            self.logger.artist_full_cached(artist.display_name(), 0)
+            self.logger.downloader_full_cached(artist=artist.display_name(), updated=0)
             return 0
 
         updated_count = 0
@@ -418,7 +443,7 @@ class Downloader:
                 return True
 
             except Exception as e:
-                self.logger.error(f"  Failed to fetch post {post.id}: {e}")
+                self.logger.downloader_fetch_post_failed(post_id=post.id, error=str(e), level='warning')
                 return False
 
         with ThreadPoolExecutor(max_workers=self.config.max_concurrent_posts) as executor:
@@ -431,12 +456,12 @@ class Downloader:
                         updated_count += 1
                         # Log progress every 10 posts
                         if updated_count % 10 == 0:
-                            self.logger.info(f"  Progress: {updated_count}/{len(posts_to_update)} posts processed")
+                            self.logger.downloader_full_update_progress(updated=updated_count, total=len(posts_to_update))
 
         # Save updated posts
         self.cache.save_posts(artist.id, posts)
 
-        self.logger.artist_full_cached(artist.display_name(), updated_count)
+        self.logger.downloader_full_cached(artist=artist.display_name(), updated=updated_count)
         return updated_count
 
     # ==================== Utility Methods ====================
@@ -455,7 +480,7 @@ class Downloader:
         # Log if posts were filtered out
         filtered_count = len(posts) - len(filtered_posts)
         if filtered_count > 0:
-            self.logger.info(f"{artist.display_name()}: Filtered out {filtered_count} posts")
+            self.logger.downloader_filtered_posts(artist=artist.display_name(), filtered=filtered_count)
 
         return filtered_posts
 
