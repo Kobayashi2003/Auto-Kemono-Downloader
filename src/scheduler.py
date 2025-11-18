@@ -5,10 +5,10 @@ from datetime import datetime, timedelta
 from queue import Queue
 from typing import Dict, List, Optional
 
-from .models import DownloadTask, QueueStatus, TaskStatus, TaskType
 from .storage import Storage
 from .downloader import Downloader
 from .logger import Logger
+from .models import DownloadTask, QueueStatus, TaskStatus, TaskType
 
 
 class Scheduler:
@@ -58,8 +58,6 @@ class Scheduler:
 
     def cancel_all_tasks(self):
         """Cancel all queued and running tasks"""
-        import time
-
         # Step 1: Clear queued tasks
         with self.lock:
             while not self.task_queue.empty():
@@ -116,11 +114,11 @@ class Scheduler:
     def _add_task(self, task: DownloadTask) -> bool:
         with self.lock:
             if task in self.queued_tasks:
-                self.logger.scheduler_task_duplicate(artist_id=task.artist_id, type=task.task_type.name)
+                self.logger.scheduler_task_duplicate(artist_id=task.artist_id, type=task.task_type)
                 return False
             self.queued_tasks.add(task)
             self.task_queue.put(task)
-            self.logger.scheduler_task_queued(artist_id=task.artist_id, type=task.task_type.name)
+            self.logger.scheduler_task_queued(artist_id=task.artist_id, type=task.task_type)
             return True
 
     def get_queue_status(self) -> QueueStatus:
@@ -164,12 +162,12 @@ class Scheduler:
 
         future = self.executor.submit(self._execute_task, task)
         future.add_done_callback(lambda f: self._task_completed(task, f))
-        self.logger.scheduler_task_started(artist_id=task.artist_id, type=task.task_type.name, active=len(self.active_tasks), max_workers=self.max_workers)
+        self.logger.scheduler_task_started(artist_id=task.artist_id, type=task.task_type, active=len(self.active_tasks), max_workers=self.max_workers)
 
     def _execute_task(self, task: DownloadTask):
         task.status = TaskStatus.RUNNING
         task.started_at = datetime.now()
-        self.logger.scheduler_task_execute_begin(artist_id=task.artist_id, type=task.task_type.name,
+        self.logger.scheduler_task_execute_begin(artist_id=task.artist_id, type=task.task_type,
                                                  from_date=task.from_date or '', until_date=task.until_date or '')
 
         try:
@@ -204,7 +202,7 @@ class Scheduler:
         if task.started_at and task.finished_at:
             seconds = (task.finished_at - task.started_at).seconds
             elapsed = seconds
-        self.logger.scheduler_task_completed(artist_id=task.artist_id, status=task.status.name, elapsed_s=elapsed)
+        self.logger.scheduler_task_completed(artist_id=task.artist_id, status=task.status, elapsed_s=elapsed)
 
     def _check_scheduled_tasks(self):
         artists = self.storage.get_artists()

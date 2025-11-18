@@ -149,9 +149,13 @@ def get_artists(ctx: CLIContext, filter_func=None, sort_by='name') -> List[Artis
     return artists
 
 
-def display_artist_list(ctx: CLIContext, filter_func=None, sort_by='name', numbered: bool = False):
+def display_artist_list(ctx: CLIContext, filter_func=None, sort_by='name', numbered: bool = False, show_ignore: bool = False, show_completed: bool = False) -> List[Artist]:
     """Display artist list"""
     artists = get_artists(ctx, filter_func, sort_by)
+    if not show_ignore:
+        artists = [a for a in artists if not a.ignore]
+    if not show_completed:
+        artists = [a for a in artists if not a.completed]
 
     print("\nArtists:")
     print("-" * 80)
