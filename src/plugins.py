@@ -38,10 +38,29 @@ def _load_module(module_filename: str) -> types.ModuleType:
     path = base_dir / module_filename
     if not path.exists():
         raise FileNotFoundError(f"Plugin file not found: {path}")
-    spec = importlib.util.spec_from_file_location(module_filename[:-3], path)
+
+    # Determine module name and package for proper relative imports
+    module_path = pathlib.Path(module_filename)
+    module_name = module_path.stem
+
+    # If it's in src/ directory, set package to 'src' for relative imports to work
+    if 'src' in module_path.parts:
+        full_module_name = 'src.' + module_name
+        package = 'src'
+    else:
+        full_module_name = module_name
+        package = None
+
+    spec = importlib.util.spec_from_file_location(full_module_name, path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Cannot create spec for {module_filename}")
+
     module = importlib.util.module_from_spec(spec)
+
+    # Set package for relative imports
+    if package:
+        module.__package__ = package
+
     spec.loader.exec_module(module)  # type: ignore[arg-type]
     return module
 

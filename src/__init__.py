@@ -5,7 +5,7 @@ from .downloader import Downloader
 from .scheduler import Scheduler
 from .logger import Logger
 from .notifier import Notifier
-from .ui import CLI
+from .cmd import CLIContext
 from .formatter import Formatter
 from .filters import PostFilter
 from .validator import Validator
@@ -17,7 +17,7 @@ from .external_links import ExternalLinksExtractor
 
 __all__ = [
     'Storage', 'Cache', 'API', 'Downloader', 'Scheduler', 'Logger', 'Notifier',
-    'CLI', 'Formatter', 'PostFilter', 'Validator', 'Migrator', 'Utils',
+    'CLIContext', 'Formatter', 'PostFilter', 'Validator', 'Migrator', 'Utils',
     'ProxyPool', 'ClashProxyPool', 'NullProxyPool', 'RPCServer', 'RPCClient',
     'ExternalLinksExtractor'
 ]
