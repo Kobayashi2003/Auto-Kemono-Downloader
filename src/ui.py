@@ -8,6 +8,8 @@ from typing import List, Optional
 from prompt_toolkit import prompt
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.document import Document
+from prompt_toolkit.history import History
+from prompt_toolkit.shortcuts import PromptSession
 
 from .api import API
 from .cache import Cache
@@ -37,6 +39,45 @@ class CLIContext:
         self.scheduler = scheduler
         self.migrator = migrator
         self.validator = validator
+        self._last_selected_artist: Optional[str] = None
+        self._prefilled_artist_id: Optional[str] = None
+
+
+class JSONHistory(History):
+    """History backed by Storage's history.json file (command strings only)
+
+    Provides up/down arrow navigation through command history in prompt_toolkit.
+    """
+
+    def __init__(self, storage: Storage):
+        super().__init__()
+        self.storage = storage
+
+    async def load(self):
+        """Async generator to load history items"""
+        try:
+            records = self.storage.get_history(limit=1000)  # Load up to 1000 history entries
+            # Extract just the command strings, keep order (oldest to newest)
+            for record in reversed(records):  # Reverse to get chronological order
+                yield record.command
+        except:
+            pass
+
+    def load_history_strings(self) -> List[str]:
+        """Load command strings from storage's history (for sync access if needed)"""
+        try:
+            records = self.storage.get_history(limit=1000)
+            return [record.command for record in reversed(records)]
+        except:
+            return []
+
+    def store_string(self, string: str) -> None:
+        """Called when new command is entered
+
+        Note: We don't add here because storage.add_history() is called
+        in run_cli after command execution. This method is kept for compatibility.
+        """
+        pass
 
 
 class CommandCompleter(Completer):
@@ -211,7 +252,7 @@ def find_artist(user_input: str, ctx: CLIContext, filter_func=None) -> tuple[Opt
 
 
 def prompt_selection(ctx: CLIContext, filter_func=None) -> Optional[Artist]:
-    """Prompt userto select an artist"""
+    """Prompt user to select an artist"""
     try:
         user_input = prompt("> ", completer=ArtistCompleter(ctx, filter_func)).strip()
         if not user_input:
@@ -222,6 +263,8 @@ def prompt_selection(ctx: CLIContext, filter_func=None) -> Optional[Artist]:
 
         if exact:
             print(f"Selected: {exact.display_name()}")
+            # Record the artist selection for history
+            ctx._last_selected_artist = exact.id
             return exact
 
         if new_filter is None:
@@ -243,7 +286,21 @@ def select_artist(ctx: CLIContext, filter_func=None, sort_by='name') -> Optional
     """Select artist with auto-completion and fuzzy search
 
     Input: number/name/ID, Tab for auto-completion, Ctrl+C to cancel
+
+    If _prefilled_artist_id is set (from history re-execution), use it directly.
     """
+    # If prefilled artist_id is set (from history re-execution), use it directly
+    if ctx._prefilled_artist_id:
+        artist = ctx.storage.get_artist(ctx._prefilled_artist_id)
+        if artist:
+            print(f"Using artist from history: {artist.display_name()}")
+            ctx._last_selected_artist = artist.id
+            ctx._prefilled_artist_id = None  # Clear for next command
+            return artist
+        else:
+            print(f"Warning: Artist {ctx._prefilled_artist_id} not found, please select manually")
+            ctx._prefilled_artist_id = None
+
     artists = display_artist_list(ctx, filter_func, sort_by, numbered=True)
 
     if not artists:
@@ -2251,19 +2308,68 @@ def cmd_history(ctx: CLIContext, limit: str = "10"):
             print("No command history yet.")
             return
 
-        print(f"\n{'#':<4} {'Status':<8} {'Timestamp':<26} Command")
+        print(f"\n{'#':<4} {'Status':<8} {'Timestamp':<20} {'Command':<40}")
         print("=" * 80)
 
         for i, record in enumerate(records, 1):
             status = "✓ OK" if record.success else "✗ ERR"
-            # Format timestamp to be more readable
-            ts = record.timestamp.split('T')
-            ts_str = f"{ts[0]} {ts[1][:8]}" if len(ts) > 1 else record.timestamp
-            print(f"{i:<4} {status:<8} {ts_str:<26} {record.command}")
-            if record.note:
-                print(f"      Note: {record.note}")
+
+            # Format timestamp: "2025-11-20T13:40:47.123456" -> "2025-11-20 13:40:47"
+            try:
+                # Parse ISO format and reformat
+                dt = datetime.fromisoformat(record.timestamp)
+                ts_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except:
+                ts_str = record.timestamp[:19] if len(record.timestamp) >= 19 else record.timestamp
+
+            # Truncate command if too long
+            cmd_display = record.command[:40] if len(record.command) > 40 else record.command
+
+            print(f"{i:<4} {status:<8} {ts_str:<20} {cmd_display:<40}")
+
+            # Show artist_id and params if available (on separate lines, aligned)
+            if record.artist_id or record.params or record.note:
+                prefix = "     "
+                if record.artist_id:
+                    print(f"{prefix}Artist: {record.artist_id}")
+                if record.params:
+                    params_str = ", ".join(f"{k}={v}" for k, v in record.params.items())
+                    print(f"{prefix}Params: {params_str}")
+                if record.note:
+                    print(f"{prefix}Error: {record.note}")
 
         print("=" * 80)
+
+        # Ask if user wants to re-execute
+        choice = input("\nRe-execute? (enter number or skip): ").strip().lower()
+
+        if not choice:
+            return
+
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(records):
+                selected = records[idx]
+
+                # Set prefilled artist if available
+                if selected.artist_id:
+                    ctx._prefilled_artist_id = selected.artist_id
+
+                # Re-execute by calling the handler directly
+                handler = COMMAND_MAP.get(selected.command)
+                if handler:
+                    try:
+                        if selected.params:
+                            handler(ctx, **selected.params)
+                        else:
+                            handler(ctx)
+                        print(f"\n✓ Executed: {selected.command}")
+                    except Exception as e:
+                        print(f"\n✗ Error executing command: {e}")
+                else:
+                    print(f"\n✗ Command not found: {selected.command}")
+            else:
+                print(f"Invalid selection: {choice}")
 
     except ValueError:
         print(f"Invalid limit value: {limit}. Expected a number.")
@@ -2350,13 +2456,20 @@ def parse_command(cmd_input: str) -> tuple[str, dict]:
 
 def run_cli(ctx: CLIContext):
     """CLI main loop"""
-    # Create command completer
+    # Create command completer and history
     command_completer = CommandCompleter(COMMAND_MAP.keys())
+    cmd_history = JSONHistory(ctx.storage)
+
+    # Create prompt session with history and completion
+    session = PromptSession(
+        history=cmd_history,
+        completer=command_completer
+    )
 
     while True:
         try:
-            # Use prompt with command completion
-            cmd_input = prompt("> ", completer=command_completer).strip().lower()
+            # Use prompt session with up/down arrow support for history
+            cmd_input = session.prompt("> ").strip().lower()
 
             if not cmd_input:
                 continue
@@ -2378,20 +2491,28 @@ def run_cli(ctx: CLIContext):
 
                     try:
                         handler(ctx, **valid_params)
-                        # Record successful command
-                        ctx.storage.add_history(cmd_input, success=True)
+                        # Record successful command with artist_id and params (only command name, not full input)
+                        artist_id = ctx._last_selected_artist
+                        ctx._last_selected_artist = None  # Clear for next command
+                        ctx.storage.add_history(command, success=True, artist_id=artist_id, params=valid_params)
                     except Exception as e:
                         # Record failed command with error message
-                        ctx.storage.add_history(cmd_input, success=False, note=str(e))
+                        artist_id = ctx._last_selected_artist
+                        ctx._last_selected_artist = None  # Clear for next command
+                        ctx.storage.add_history(command, success=False, artist_id=artist_id, params=valid_params, note=str(e))
                         raise
                 else:
                     try:
                         handler(ctx)
-                        # Record successful command
-                        ctx.storage.add_history(cmd_input, success=True)
+                        # Record successful command with artist_id (only command name, not full input)
+                        artist_id = ctx._last_selected_artist
+                        ctx._last_selected_artist = None  # Clear for next command
+                        ctx.storage.add_history(command, success=True, artist_id=artist_id, params={})
                     except Exception as e:
                         # Record failed command with error message
-                        ctx.storage.add_history(cmd_input, success=False, note=str(e))
+                        artist_id = ctx._last_selected_artist
+                        ctx._last_selected_artist = None  # Clear for next command
+                        ctx.storage.add_history(command, success=False, artist_id=artist_id, params={}, note=str(e))
                         raise
             else:
                 print("Unknown command. Type 'help' for available commands.")

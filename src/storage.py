@@ -77,11 +77,17 @@ class Storage:
 
     # ==================== History ====================
 
-    def add_history(self, command: str, success: bool = True, note: str = ""):
-        """Add a command to history"""
+    def add_history(self, command: str, success: bool = True, artist_id: str = None, params: dict = None, note: str = ""):
+        """Add a command to history with optional artist_id and parameters"""
         with self.lock:
             data = json.loads(self.history_file.read_text(encoding='utf-8'))
-            record = HistoryRecord(command=command, success=success, note=note)
+            record = HistoryRecord(
+                command=command, 
+                success=success, 
+                artist_id=artist_id,
+                params=params or {},
+                note=note
+            )
             data.append(record.__dict__)
             self.history_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
 

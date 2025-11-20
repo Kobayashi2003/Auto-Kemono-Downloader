@@ -14,10 +14,12 @@ NO_CONTENT_MARKER = "<NO_CONTENT>"
 @dataclass
 class HistoryRecord:
     """Command history record"""
-    command: str                          # Full command string with parameters (e.g., "download:artist_id=123")
+    command: str
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
-    success: bool = True                  # Whether command executed successfully
-    note: str = ""                        # Optional note/error message
+    success: bool = True
+    artist_id: Optional[str] = None
+    params: Dict = field(default_factory=dict)
+    note: str = ""
 
 
 # ==================== Core Data Models ====================
