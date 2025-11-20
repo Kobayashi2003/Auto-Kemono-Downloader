@@ -5,7 +5,7 @@ from src import (
     API, CLI, Cache, Downloader, Logger,
     Migrator, Notifier, Scheduler, Storage,
     Validator, ClashProxyPool, NullProxyPool,
-    RPCServer, RPCClient
+    RPCServer, RPCClient, ExternalLinksExtractor
 )
 
 
@@ -104,6 +104,10 @@ def main():
     validator = Validator(
         data_dir="data"
     )
+    external_links = ExternalLinksExtractor(
+        cache=cache,
+        logger=logger
+    )
     cli = CLI(
         storage=storage,
         scheduler=scheduler,
@@ -111,7 +115,8 @@ def main():
         api=api,
         downloader=downloader,
         migrator=migrator,
-        validator=validator
+        validator=validator,
+        external_links=external_links
     )
     rpc_server = RPCServer(cli.ctx, port=18861)
 

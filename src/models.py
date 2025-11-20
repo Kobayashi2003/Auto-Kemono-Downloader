@@ -426,3 +426,15 @@ class MigrationResult:
     total: int
     success: int
     failed: List[tuple]  # [(old_path, new_path, item_id, error)]
+
+
+# ==================== External Links Models ====================
+
+@dataclass
+class ExternalLink:
+    """External link found in post content"""
+    url: str
+    domain: str
+    protocol: str
+    post_id: str
+    artist_id: str

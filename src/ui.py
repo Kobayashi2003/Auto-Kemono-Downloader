@@ -15,6 +15,7 @@ from .api import API
 from .cache import Cache
 from .downloader import Downloader
 from .editor import edit_json
+from .external_links import ExternalLinksExtractor
 from .migrator import Migrator
 from .models import Artist, MigrationConfig, ValidationLevel, ArtistFolderParams, PostFolderParams
 from .scheduler import Scheduler
@@ -31,7 +32,7 @@ class CLIContext:
     """CLI context containing all dependencies"""
 
     def __init__(self, storage: Storage, scheduler: Scheduler, cache: Cache, api: API,
-                 downloader: Downloader, migrator: Migrator, validator: Validator):
+                 downloader: Downloader, migrator: Migrator, validator: Validator, external_links: ExternalLinksExtractor):
         self.api = api
         self.cache = cache
         self.storage = storage
@@ -39,6 +40,7 @@ class CLIContext:
         self.scheduler = scheduler
         self.migrator = migrator
         self.validator = validator
+        self.external_links = external_links
         self._last_selected_artist: Optional[str] = None
         self._prefilled_artist_id: Optional[str] = None
 
@@ -58,7 +60,7 @@ class JSONHistory(History):
         try:
             records = self.storage.get_history(limit=1000)  # Load up to 1000 history entries
             # Extract just the command strings, keep order (oldest to newest)
-            for record in reversed(records):  # Reverse to get chronological order
+            for record in records:
                 yield record.command
         except:
             pass
@@ -371,6 +373,14 @@ def cmd_help(ctx: CLIContext = None):
     print("  config-artist          - Edit artist-specific configuration")
     print("  config-global          - Edit global configuration")
     print("  config-validation      - Edit validation ignore configuration")
+    print()
+    print("Analysis:")
+    print("  extract-links          - Extract external links from an artist's posts")
+    print("                           Parameters: match=<regex>,unique=true|false,show_stats=true|false")
+    print("                           Example: extract-links:match=twitter")
+    print("  extract-all-links      - Extract external links from all active artists' posts")
+    print("                           Parameters: match=<regex>,unique=true|false,show_stats=true|false")
+    print("                           Example: extract-all-links:match=twitter")
     print()
     print("History:")
     print("  history                - Show recent command history (default: last 10)")
@@ -2377,6 +2387,149 @@ def cmd_history(ctx: CLIContext, limit: str = "10"):
         print(f"Error retrieving history: {e}")
 
 
+def cmd_extract_links(ctx: CLIContext, match: str = "", unique: str = "true", show_stats: str = "true"):
+    """Extract external links from an artist's cached posts"""
+    artist = select_artist(ctx)
+    if not artist:
+        return
+
+    print(f"\nExtracting links from: {artist.display_name()}")
+    print("-" * 80)
+
+    # Parse parameters
+    match_pattern = match.strip() or None
+    unique_bool = str(unique).lower() == "true"
+    show_stats_bool = str(show_stats).lower() == "true"
+
+    try:
+        links = ctx.external_links.extract_links_from_artist(artist.id, match=match_pattern, unique=unique_bool)
+
+        if not links:
+            print("No links found.")
+            return
+
+        # Group links by domain for display
+        links_by_domain = {}
+        for link in links:
+            if link.domain not in links_by_domain:
+                links_by_domain[link.domain] = []
+            links_by_domain[link.domain].append(link)
+
+        print(f"Found {len(links)} links from {len(set(link.post_id for link in links))} posts")
+        print()
+        print("Links by domain:")
+        print("-" * 80)
+
+        idx = 1
+        for domain in sorted(links_by_domain.keys()):
+            domain_links = links_by_domain[domain]
+            for link in domain_links:
+                print(f"{idx:3}. [{link.post_id}] {link.url}")
+                idx += 1
+
+        if show_stats_bool:
+            print()
+            print("Statistics:")
+            print("-" * 80)
+
+            stats = ctx.external_links.get_link_statistics(links)
+            print(f"Total links: {stats['total_links']}")
+            print(f"Unique domains: {stats['unique_domains']}")
+            print(f"Posts with links: {stats['unique_posts']}")
+            print(f"Protocols: {stats['protocols']}")
+
+            if stats['top_domains']:
+                print("\nTop domains:")
+                for domain, count in stats['top_domains'].items():
+                    print(f"  {domain}: {count} links")
+
+        print()
+        print("=" * 80)
+
+    except Exception as e:
+        print(f"✗ Error extracting links: {e}")
+
+
+def cmd_extract_all_links(ctx: CLIContext, match: str = "", unique: str = "true", show_stats: str = "true"):
+    """Extract external links from all artists' cached posts"""
+    artists = ctx.storage.get_artists()
+    if not artists:
+        print("No artists found")
+        return
+
+    active_artists = [a for a in artists if not a.ignore and not a.completed]
+    if not active_artists:
+        print("No active artists to extract links from")
+        return
+
+    print(f"\nExtracting links from {len(active_artists)} artists...")
+    print("-" * 80)
+
+    # Parse parameters
+    match_pattern = match.strip() or None
+    unique_bool = str(unique).lower() == "true"
+    show_stats_bool = str(show_stats).lower() == "true"
+
+    try:
+        all_links = []
+        links_by_artist = {}
+
+        for artist in active_artists:
+            try:
+                links = ctx.external_links.extract_links_from_artist(artist.id, match=match_pattern, unique=unique_bool)
+                if links:
+                    all_links.extend(links)
+                    links_by_artist[artist.id] = links
+            except Exception as e:
+                print(f"✗ Error extracting links from {artist.display_name()}: {e}")
+
+        if not all_links:
+            print("No links found across all artists.")
+            return
+
+        # Display results grouped by artist
+        print(f"\nFound {len(all_links)} total links")
+        print()
+        print("Results by artist:")
+        print("-" * 80)
+
+        idx = 1
+        for artist in active_artists:
+            if artist.id not in links_by_artist:
+                continue
+
+            artist_links = links_by_artist[artist.id]
+            print(f"\n{artist.display_name()} [{artist.id}] ({len(artist_links)} links):")
+
+            for link in artist_links:
+                print(f"  {idx:3}. [{link.post_id}] {link.url}")
+                idx += 1
+
+        if show_stats_bool:
+            print()
+            print("=" * 80)
+            print("Statistics:")
+            print("-" * 80)
+
+            stats = ctx.external_links.get_link_statistics(all_links)
+            print(f"Total links: {stats['total_links']}")
+            print(f"Unique domains: {stats['unique_domains']}")
+            print(f"Posts with links: {stats['unique_posts']}")
+            print(f"Artists with links: {stats['unique_artists']}")
+            print(f"Protocols: {stats['protocols']}")
+
+            if stats['top_domains']:
+                print("\nTop domains:")
+                for domain, count in stats['top_domains'].items():
+                    print(f"  {domain}: {count} links")
+
+        print()
+        print("=" * 80)
+
+    except Exception as e:
+        print(f"✗ Error extracting links: {e}")
+
+
 # ============================================================================
 # Command Dispatcher
 # ============================================================================
@@ -2421,9 +2574,11 @@ COMMAND_MAP = {
     'config-artist': cmd_config_artist,
     'config-global': cmd_config_global,
     'config-validation': cmd_config_validation,
+    'extract-links': cmd_extract_links,
+    'extract-all-links': cmd_extract_all_links,
     'history': cmd_history,
     'clear': cmd_clear,
-    'test': cmd_test,
+    # 'test': cmd_test,
     'exit': cmd_exit,
 }
 
@@ -2529,9 +2684,9 @@ def run_cli(ctx: CLIContext):
 # ============================================================================
 
 class CLI:
-    def __init__(self, storage: Storage, scheduler: Scheduler,
-                 cache: Cache, api: API, downloader: Downloader, migrator: Migrator, validator: Validator):
-        self.ctx = CLIContext(storage, scheduler, cache, api, downloader, migrator, validator)
+    def __init__(self, storage: Storage, scheduler: Scheduler, cache: Cache, api: API,
+                 downloader: Downloader, migrator: Migrator, validator: Validator, external_links: ExternalLinksExtractor):
+        self.ctx = CLIContext(storage, scheduler, cache, api, downloader, migrator, validator, external_links)
 
     def run(self):
         """Run CLI"""
