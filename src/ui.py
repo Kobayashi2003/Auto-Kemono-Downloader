@@ -149,13 +149,9 @@ def get_artists(ctx: CLIContext, filter_func=None, sort_by='name') -> List[Artis
     return artists
 
 
-def display_artist_list(ctx: CLIContext, filter_func=None, sort_by='name', numbered: bool = False, show_ignore: bool = False, show_completed: bool = False) -> List[Artist]:
+def display_artist_list(ctx: CLIContext, filter_func=None, sort_by='name', numbered: bool = False) -> List[Artist]:
     """Display artist list"""
     artists = get_artists(ctx, filter_func, sort_by)
-    if not show_ignore:
-        artists = [a for a in artists if not a.ignore]
-    if not show_completed:
-        artists = [a for a in artists if not a.completed]
 
     print("\nArtists:")
     print("-" * 80)
@@ -274,6 +270,8 @@ def cmd_help(ctx: CLIContext = None):
     print("                           Example: list:sort_by=status")
     print("  ignore                 - Ignore an artist (skip in scheduled tasks)")
     print("  unignore               - Unignore an artist (include in scheduled tasks)")
+    print("  ignore-inactive        - Ignore artists inactive for N months (default 6)")
+    print("                           Parameters: months=<number>")
     print("  complete               - Mark an artist as completed (skip all downloads)")
     print("  uncomplete             - Mark an artist as not completed (resume downloads)")
     print()
@@ -317,9 +315,15 @@ def cmd_help(ctx: CLIContext = None):
     print("  config-global          - Edit global configuration")
     print("  config-validation      - Edit validation ignore configuration")
     print()
+    print("History:")
+    print("  history                - Show recent command history (default: last 10)")
+    print("                           Parameters: limit=<number>")
+    print("                           Example: history:limit=20")
+    print()
     print("Other:")
     print("  help                   - Show this help")
     print("  clear                  - Clear screen")
+    print("  test                   - Test plugins (should output 'kobayashi')")
     print("  exit                   - Exit program")
     print()
     print("Command Parameters:")
@@ -422,7 +426,7 @@ def cmd_list_artists(ctx: CLIContext, sort_by='name'):
     Args:
         sort_by: Sort method ('name', 'status', 'posts', 'recent')
     """
-    artists = display_artist_list(ctx, filter_func=None, sort_by=sort_by, numbered=False)
+    artists = display_artist_list(ctx, filter_func=lambda a: not a.ignore and not a.completed, sort_by=sort_by, numbered=False)
 
     if not artists:
         print("No artists found")
@@ -478,6 +482,105 @@ def cmd_uncomplete_artist(ctx: CLIContext):
     ctx.storage.save_artist(artist)
     print(f"Removed completed flag for: {artist.display_name()}")
     print("This artist will be included in downloads")
+
+
+def cmd_ignore_inactive(ctx: CLIContext, months: str = "6"):
+    """Ignore artists that have had no updates for N months.
+
+    Only processes artists where all posts are done (no undone or failed), and
+    that are not already marked completed or ignored.
+
+    Args:
+        months: Number of months with no updates to consider inactive (default 6)
+    """
+    # Parse months parameter
+    try:
+        months_int = int(str(months).strip() or "6")
+        if months_int < 1:
+            raise ValueError()
+    except Exception:
+        print("Invalid 'months' parameter. Use a positive integer, e.g., months=6")
+        return
+
+    # Helper to compute threshold date by subtracting months without external deps
+    def subtract_months(dt: datetime, m: int) -> datetime:
+        year = dt.year
+        month = dt.month - m
+        # Normalize year and month
+        while month <= 0:
+            month += 12
+            year -= 1
+        # Keep day within valid range (use day 28 as safe baseline, then adjust)
+        day = min(dt.day, 28)
+        return datetime(year, month, day, dt.hour, dt.minute, dt.second, dt.microsecond)
+
+    threshold = subtract_months(datetime.now(), months_int)
+
+    artists = ctx.storage.get_artists()
+    if not artists:
+        print("No artists found")
+        return
+
+    candidates = []  # (artist, last_published_dt)
+
+    for artist in artists:
+        if artist.ignore or artist.completed:
+            continue
+
+        stats = ctx.cache.stats(artist.id)
+        if stats['total'] == 0:
+            # No cached posts to base decision on
+            continue
+
+        # Must have no undone posts (includes posts with failed files)
+        if len(ctx.cache.get_undone(artist.id)) > 0:
+            continue
+
+        # Find last published date from cached posts
+        posts = ctx.cache.load_posts(artist.id)
+        last_dt = None
+        for p in posts:
+            if not p.published:
+                continue
+            pub = p.published.strip()
+            if not pub:
+                continue
+            # Try common ISO formats
+            parsed = None
+            try:
+                parsed = datetime.fromisoformat(pub)
+            except Exception:
+                # Attempt to trim timezone 'Z' if present
+                if pub.endswith('Z'):
+                    try:
+                        parsed = datetime.fromisoformat(pub[:-1])
+                    except Exception:
+                        parsed = None
+            if parsed is None:
+                continue
+            if (last_dt is None) or (parsed > last_dt):
+                last_dt = parsed
+
+        if last_dt is None:
+            # No valid published dates
+            continue
+
+        if last_dt <= threshold:
+            candidates.append((artist, last_dt))
+
+    if not candidates:
+        print(f"No inactive artists found (>{months_int} months) that meet criteria")
+        return
+
+    # Apply ignore flag
+    updated = 0
+    for artist, last_dt in sorted(candidates, key=lambda x: x[1]):
+        artist.ignore = True
+        ctx.storage.save_artist(artist)
+        updated += 1
+        print(f"Ignored: {artist.display_name()} [{artist.id}] (last post: {last_dt.date()})")
+
+    print(f"\nTotal ignored: {updated} (inactive for > {months_int} months)")
 
 
 # ============================================================================
@@ -796,7 +899,6 @@ def cmd_reset_artist(ctx: CLIContext, last_date: str = ""):
             return
         count = ctx.cache.reset_after_date(artist.id, last_date)
         print(f"Reset {count} posts to undone")
-
 
 
 def cmd_reset_all_artists(ctx: CLIContext):
@@ -1409,7 +1511,7 @@ def cmd_tasks(ctx: CLIContext):
         print("-" * 80)
         print(f"RUNNING TASKS ({len(active_tasks)})")
         print("-" * 80)
-        print(f"{'Type':<10} {'Status':<10} {'Elapsed':<10} Artist")
+        print(f"{'Type':<10} {'Status':<10} {'Elapsed':<10} {'Posts':<9} Artist")
         print("-" * 80)
         for task in active_tasks:
             elapsed = ""
@@ -1424,19 +1526,23 @@ def cmd_tasks(ctx: CLIContext):
 
             artist = ctx.storage.get_artist(task.artist_id)
             name = artist.display_name() if artist else task.artist_id
-            print(f"{task.task_type:<10} {task.status:<10} {elapsed:<10} {name}")
+            stats = ctx.cache.stats(task.artist_id)
+            posts_str = f"{stats['done']}/{stats['total']}"
+            print(f"{task.task_type:<10} {task.status:<10} {elapsed:<10} {posts_str:<9} {name}")
         print()
 
     if queued_tasks and len(queued_tasks) > 0:
         print("-" * 80)
         print(f"QUEUED TASKS ({len(queued_tasks)})")
         print("-" * 80)
-        print(f"{'Type':<10} Artist")
+        print(f"{'Type':<10} {'Posts':<9} Artist")
         print("-" * 80)
         for task in queued_tasks[:10]:
             artist = ctx.storage.get_artist(task.artist_id)
             name = artist.display_name() if artist else task.artist_id
-            print(f"{task.task_type:<10} {name}")
+            stats = ctx.cache.stats(task.artist_id)
+            posts_str = f"{stats['done']}/{stats['total']}"
+            print(f"{task.task_type:<10} {posts_str:<9} {name}")
         if len(queued_tasks) > 10:
             print(f"\n... and {len(queued_tasks) - 10} more tasks")
         print()
@@ -2121,6 +2227,50 @@ def cmd_exit(ctx: CLIContext):
     os._exit(0)
 
 
+def cmd_test(ctx: CLIContext):
+    """Test plugin system by calling plugins/test_plugin.py"""
+    try:
+        from .plugins import dynamic_call
+        func = dynamic_call('test_plugin', './plugins/test_plugin.py')  # returns function object (no args)
+        result = func()
+        print(result)
+    except Exception as e:
+        print(f"Plugin test failed: {e}")
+
+
+def cmd_history(ctx: CLIContext, limit: str = "10"):
+    """Show recent command history
+
+    Usage: history or history:limit=20
+    """
+    try:
+        limit_int = int(limit)
+        records = ctx.storage.get_history(limit=limit_int)
+
+        if not records:
+            print("No command history yet.")
+            return
+
+        print(f"\n{'#':<4} {'Status':<8} {'Timestamp':<26} Command")
+        print("=" * 80)
+
+        for i, record in enumerate(records, 1):
+            status = "✓ OK" if record.success else "✗ ERR"
+            # Format timestamp to be more readable
+            ts = record.timestamp.split('T')
+            ts_str = f"{ts[0]} {ts[1][:8]}" if len(ts) > 1 else record.timestamp
+            print(f"{i:<4} {status:<8} {ts_str:<26} {record.command}")
+            if record.note:
+                print(f"      Note: {record.note}")
+
+        print("=" * 80)
+
+    except ValueError:
+        print(f"Invalid limit value: {limit}. Expected a number.")
+    except Exception as e:
+        print(f"Error retrieving history: {e}")
+
+
 # ============================================================================
 # Command Dispatcher
 # ============================================================================
@@ -2132,6 +2282,7 @@ COMMAND_MAP = {
     'list': cmd_list_artists,
     'ignore': cmd_ignore_artist,
     'unignore': cmd_unignore_artist,
+    'ignore-inactive': cmd_ignore_inactive,
     'complete': cmd_complete_artist,
     'uncomplete': cmd_uncomplete_artist,
     'check': cmd_check_artist,
@@ -2164,7 +2315,9 @@ COMMAND_MAP = {
     'config-artist': cmd_config_artist,
     'config-global': cmd_config_global,
     'config-validation': cmd_config_validation,
+    'history': cmd_history,
     'clear': cmd_clear,
+    'test': cmd_test,
     'exit': cmd_exit,
 }
 
@@ -2223,9 +2376,23 @@ def run_cli(ctx: CLIContext):
                     if invalid_params:
                         print(f"Warning: Command '{command}' doesn't support parameters: {', '.join(invalid_params)}")
 
-                    handler(ctx, **valid_params)
+                    try:
+                        handler(ctx, **valid_params)
+                        # Record successful command
+                        ctx.storage.add_history(cmd_input, success=True)
+                    except Exception as e:
+                        # Record failed command with error message
+                        ctx.storage.add_history(cmd_input, success=False, note=str(e))
+                        raise
                 else:
-                    handler(ctx)
+                    try:
+                        handler(ctx)
+                        # Record successful command
+                        ctx.storage.add_history(cmd_input, success=True)
+                    except Exception as e:
+                        # Record failed command with error message
+                        ctx.storage.add_history(cmd_input, success=False, note=str(e))
+                        raise
             else:
                 print("Unknown command. Type 'help' for available commands.")
 

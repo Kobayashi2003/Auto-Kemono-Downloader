@@ -3,7 +3,7 @@ import threading
 from pathlib import Path
 from typing import List, Optional
 
-from .models import Artist, Config
+from .models import Artist, Config, HistoryRecord
 
 
 class Storage:
@@ -12,6 +12,7 @@ class Storage:
         self.data_dir.mkdir(exist_ok=True)
         self.artists_file = self.data_dir / "artists.json"
         self.config_file = self.data_dir / "config.json"
+        self.history_file = self.data_dir / "history.json"
         self.lock = threading.Lock()
         self._ensure_files()
 
@@ -20,6 +21,8 @@ class Storage:
             self.artists_file.write_text("[]", encoding='utf-8')
         if not self.config_file.exists():
             self.config_file.write_text("{}", encoding='utf-8')
+        if not self.history_file.exists():
+            self.history_file.write_text("[]", encoding='utf-8')
 
     def load_config(self) -> Config:
         with self.lock:
@@ -71,3 +74,26 @@ class Storage:
     def _write_artists(self, artists: List[Artist]):
         data = [a.__dict__ for a in artists]
         self.artists_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+
+    # ==================== History ====================
+
+    def add_history(self, command: str, success: bool = True, note: str = ""):
+        """Add a command to history"""
+        with self.lock:
+            data = json.loads(self.history_file.read_text(encoding='utf-8'))
+            record = HistoryRecord(command=command, success=success, note=note)
+            data.append(record.__dict__)
+            self.history_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+
+    def get_history(self, limit: int = 10) -> List[HistoryRecord]:
+        """Get recent command history, newest first"""
+        with self.lock:
+            data = json.loads(self.history_file.read_text(encoding='utf-8'))
+            records = [HistoryRecord(**item) for item in data]
+            # Return newest first
+            return records[-limit:][::-1] if len(records) > 0 else []
+
+    def clear_history(self):
+        """Clear all history"""
+        with self.lock:
+            self.history_file.write_text("[]", encoding='utf-8')

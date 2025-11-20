@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List
 
 from .models import ArtistFolderParams, FileParams, PostFolderParams
-
+from .plugins import dynamic_call
 
 class Formatter:
     """Pure path formatter with three levels:
@@ -20,62 +20,51 @@ class Formatter:
     # ==================== Level 1: Artist Folder ====================
 
     @staticmethod
+    @dynamic_call(func_name='format_artist_plugin', module_filename='./plugins/format_plugin.py', default=lambda func: func)
     def format_artist_folder(params: ArtistFolderParams, template: str) -> Path:
         """Format artist folder path"""
-        safe_service = Formatter._sanitize(params.service)
-        safe_name = Formatter._sanitize(params.name)
-        safe_alias = Formatter._sanitize(params.alias) if params.alias else ""
-        safe_user_id = Formatter._sanitize(params.user_id)
-        safe_last_date = params.last_date[:10] if params.last_date else ""
-
-        path = template.format(
-            service=safe_service,
-            name=safe_name,
-            alias=safe_alias or safe_name,
-            user_id=safe_user_id,
-            last_date=safe_last_date
+        # First format with raw values, then sanitize each segment to keep '/' hierarchy.
+        path_raw = template.format(
+            service=params.service,
+            name=params.name,
+            alias=(params.alias or params.name),
+            user_id=params.user_id,
+            last_date=(params.last_date[:10] if params.last_date else "")
         )
-        return Path(path)
+        path_sanitized = Formatter._sanitize_path_segments(path_raw)
+        return Path(path_sanitized)
 
     # ==================== Level 2: Post Folder ====================
 
     @staticmethod
+    @dynamic_call(func_name='format_post_plugin', module_filename='./plugins/format_plugin.py', default=lambda func: func)
     def format_post_folder(params: PostFolderParams, template: str, date_format: str) -> Path:
         """Format post folder path"""
         published_str = Formatter._format_date(params.published, date_format)
-        safe_id = Formatter._sanitize(params.id)
-        safe_user = Formatter._sanitize(params.user)
-        safe_service = Formatter._sanitize(params.service)
-        # safe_title = Formatter._sanitize(params.title[:50])
-        safe_title = Formatter._sanitize(params.title)
-
-        path = template.format(
-            id=safe_id,
-            user=safe_user,
-            service=safe_service,
-            title=safe_title,
+        path_raw = template.format(
+            id=params.id,
+            user=params.user,
+            service=params.service,
+            title=params.title,
             published=published_str
         )
-        return Path(path)
+        path_sanitized = Formatter._sanitize_path_segments(path_raw)
+        return Path(path_sanitized)
 
     # ==================== Level 3: File Name ====================
 
     @staticmethod
+    @dynamic_call(func_name='format_file_plugin', module_filename='./plugins/format_plugin.py', default=lambda func: func)
     def format_file_name(params: FileParams, template: str) -> str:
         """Format single file name"""
-        safe_name = Formatter._sanitize(params.name)
-        name = template.format(
+        name_raw = template.format(
             idx=params.idx,
-            index=f"{params.idx:03d}",
-            name=safe_name,
-            filename=safe_name
+            name=params.name,
         )
-        # Add extension if missing
-        if '.' not in name and '.' in params.name:
+        if '.' not in name_raw and '.' in params.name:
             ext = params.name.rsplit('.', 1)[-1]
-            name = f"{name}.{ext}"
-
-        return name
+            name_raw = f"{name_raw}.{ext}"
+        return Formatter._sanitize(name_raw)
 
     @staticmethod
     def format_files_names(file_names: List[str], template: str,
@@ -97,7 +86,8 @@ class Formatter:
                 file_params = FileParams(name=original_name, idx=idx)
                 formatted_name = Formatter.format_file_name(file_params, template)
             else:
-                formatted_name = Formatter._sanitize(original_name)
+                file_params = FileParams(name='{name}', idx='{idx}')
+                formatted_name = Formatter.format_file_name(file_params, original_name)
 
             formatted_names.append(formatted_name)
 
@@ -173,6 +163,15 @@ class Formatter:
 
         result = result.strip(' .')
         return result or "unknown"
+
+    @staticmethod
+    def _sanitize_path_segments(path_str: str) -> str:
+        """Sanitize each segment of a formatted path without replacing '/' separators."""
+        if not path_str:
+            return "unknown"
+        segments = path_str.replace('\\', '/').split('/')
+        sanitized = [Formatter._sanitize(seg) for seg in segments]
+        return '/'.join(sanitized)
 
     @staticmethod
     def _format_date(date_str: str, date_format: str) -> str:

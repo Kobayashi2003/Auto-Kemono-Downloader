@@ -9,6 +9,17 @@ from typing import Dict, List, Optional
 NO_CONTENT_MARKER = "<NO_CONTENT>"
 
 
+# ==================== History ====================
+
+@dataclass
+class HistoryRecord:
+    """Command history record"""
+    command: str                          # Full command string with parameters (e.g., "download:artist_id=123")
+    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    success: bool = True                  # Whether command executed successfully
+    note: str = ""                        # Optional note/error message
+
+
 # ==================== Core Data Models ====================
 
 @dataclass

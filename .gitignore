@@ -5,6 +5,7 @@ temp/
 
 data/artists.json
 data/config.json
+data/history.json
 data/validation_ignore.json
 cache/
 logs/
