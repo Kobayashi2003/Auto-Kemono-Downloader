@@ -18,7 +18,7 @@ from prompt_toolkit.document import Document
 from prompt_toolkit import prompt
 
 from .editor import edit_json
-from .models import Artist, ValidationLevel, ArtistFolderParams, PostFolderParams, MigrationConfig
+from .models import Artist, ValidationLevel, ArtistFolderParams, PostFolderParams, MigrationConfig, ExternalLink
 from .validator import Validator
 from .formatter import Formatter
 from .storage import Storage
@@ -120,12 +120,14 @@ def colorize_artist(text: str, artist: Artist, ctx: CLIContext) -> str:
     return text
 
 
-def get_artists(ctx: CLIContext, filter_func=None, sort_by='name') -> list[Artist]:
+def get_artists(ctx: CLIContext, filter_func=None, sort_by='name', service="") -> list[Artist]:
     """Get filtered and sorted artists"""
     artists = ctx.storage.get_artists()
 
     if filter_func:
         artists = [a for a in artists if filter_func(a)]
+    if service:
+        artists = [a for a in artists if a.service.lower() == service.lower()]
 
     if sort_by == 'name':
         artists.sort(key=lambda a: a.display_name().lower())
@@ -138,26 +140,29 @@ def get_artists(ctx: CLIContext, filter_func=None, sort_by='name') -> list[Artis
         artists.sort(key=lambda a: ctx.cache.stats(a.id)['total'], reverse=True)
     elif sort_by == 'recent':
         artists.sort(key=lambda a: a.last_date or '', reverse=True)
+    elif sort_by == 'service':
+        artists.sort(key=lambda a: a.service or '')
 
     return artists
 
 
-def display_artist_list(ctx: CLIContext, filter_func=None, sort_by='name', numbered: bool = False) -> list[Artist]:
+def display_artist_list(ctx: CLIContext, filter_func=None, sort_by='name', service="", numbered: bool = False) -> list[Artist]:
     """Display artist list"""
-    artists = get_artists(ctx, filter_func, sort_by)
+    artists = get_artists(ctx, filter_func, sort_by, service)
 
     print("\nArtists:")
     print("-" * 80)
     for i, artist in enumerate(artists, 1):
         status = "DONE" if artist.completed else "IGNORE" if artist.ignore else "Active"
+        service = artist.service.capitalize() if artist.service else "Unkown"
         last = artist.last_date or "All posts"
         stats = ctx.cache.stats(artist.id)
         cache_info = f"{stats['done']}/{stats['total']} done" if stats['total'] > 0 else "No cache"
 
         if numbered:
-            line = f"{i:3}. [{status:6}] {last:19} {cache_info:15} - {artist.display_name()}"
+            line = f"{i:3}. [{status:6}] [{service:^7}] {last:19} {cache_info:15} - {artist.display_name()}"
         else:
-            line = f"[{status:6}] {last:19} {cache_info:15} - {artist.display_name()}"
+            line = f"[{status:6}] [{service:^7}] {last:19} {cache_info:15} - {artist.display_name()}"
 
         print(colorize_artist(line, artist, ctx))
     print("-" * 80)
@@ -275,7 +280,7 @@ def cmd_help(ctx: CLIContext = None):
     print("  add                    - Add a new artist")
     print("  remove                 - Remove an artist")
     print("  list                   - List all artists")
-    print("                           Parameters: sort_by=name|status|posts|recent")
+    print("                           Parameters: sort_by=name|status|posts|recent|service")
     print("                           Example: list:sort_by=status")
     print("  ignore                 - Ignore an artist (skip in scheduled tasks)")
     print("  unignore               - Unignore an artist (include in scheduled tasks)")
@@ -437,13 +442,17 @@ def cmd_remove_artist(ctx: CLIContext):
     print(f"Removed: {artist.display_name()}")
 
 
-def cmd_list_artists(ctx: CLIContext, sort_by='name'):
+def cmd_list_artists(ctx: CLIContext, sort_by='name', service="", all="False"):
     """List all artists
 
     Args:
         sort_by: Sort method ('name', 'status', 'posts', 'recent')
+        service: Filter by service name
     """
-    artists = display_artist_list(ctx, filter_func=lambda a: not a.ignore and not a.completed, sort_by=sort_by, numbered=False)
+    if all.lower() == "true":
+        artists = display_artist_list(ctx, sort_by=sort_by, service=service, numbered=False)
+    else:
+        artists = display_artist_list(ctx, filter_func=lambda a: not a.ignore and not a.completed, sort_by=sort_by, service=service, numbered=False)
 
     if not artists:
         print("No artists found")
@@ -2073,6 +2082,7 @@ def cmd_migrate_files(ctx: CLIContext):
 
     print()
 
+
 # ============================================================================
 # Configuration Commands
 # ============================================================================
@@ -2220,9 +2230,67 @@ def cmd_config_validation(ctx: CLIContext):
         print("Cancelled")
 
 
-def cmd_clear(ctx: CLIContext = None):
-    """Clear screen"""
-    os.system('cls' if os.name == 'nt' else 'clear')
+
+# ============================================================================
+# External Links Commands
+# ============================================================================
+
+ALLOWED_DOMAINS = [
+    'drive.google.com',   # Google Drive
+    # 'mega.nz',            # MEGA
+    # 'mega.io',            # MEGA alternative
+    # 'dropbox.com',        # Dropbox
+    # 'onedrive.live.com',  # OneDrive
+    # '1drv.ms',            # OneDrive short link
+    # 'mediafire.com',      # MediaFire
+    # 'box.com',            # Box
+    # 'wetransfer.com',     # WeTransfer
+    # 'anonfiles.com',      # AnonFiles
+    # 'pixeldrain.com',     # PixelDrain
+    # 'gofile.io',          # GoFile
+    # 'bayfiles.com',       # BayFiles
+    # 'uploadhaven.com',    # UploadHaven
+    # 'pan.baidu.com',      # Baidu Netdisk
+    # 'cloud.189.cn',       # 189 Cloud (China Telecom)
+    # 'weiyun.com',         # Tencent Weiyun
+    # 'aliyundrive.com',    # Alibaba Cloud Drive
+    # 'alipan.com',         # Alipan (Alibaba)
+    # 'jianguoyun.com',     # Nutstore
+    # '115.com',            # 115 Netdisk
+    # 'lanzou.com',         # Lanzou Cloud
+    # 'lanzoux.com',        # Lanzou alternative
+    # 'lanzoui.com',        # Lanzou alternative
+    # 'gigafile.nu',        # Gigafile
+]
+
+
+FILTERED_ARTIST = [
+    # 'fanbox_63665992',
+    # 'fanbox_81970',
+    # 'fanbox_24687177',
+    # 'fanbox_10608235',
+    # 'fanbox_4234383',
+    # 'fanbox_273185',
+    # 'fanbox_25877697',
+    # 'fanbox_490219',
+    # 'fanbox_70050825',
+    # 'fanbox_156352',
+    # 'fanbox_6049901',
+    # 'fanbox_569672',
+    # 'fanbox_9368614',
+    # 'fanbox_16731',
+    # 'fanbox_10344581',
+    # 'fantia_13794',
+    # 'patreon_59240558',
+    # 'patreon_82224513',
+    # 'patreon_69653195',
+    # 'patreon_24294624',
+    # 'patreon_52832561'
+]
+
+
+def _is_allowed_domain(link: ExternalLink) -> bool:
+    return any(d in link.domain or d in link.url for d in ALLOWED_DOMAINS) and link.artist_id not in FILTERED_ARTIST
 
 
 def cmd_extract_links(ctx: CLIContext, match: str = "", unique: str = "true", show_stats: str = "true"):
@@ -2240,10 +2308,15 @@ def cmd_extract_links(ctx: CLIContext, match: str = "", unique: str = "true", sh
     show_stats_bool = str(show_stats).lower() == "true"
 
     try:
-        links = ctx.external_links.extract_links_from_artist(artist.id, match=match_pattern, unique=unique_bool)
+        links = ctx.external_links.extract_links_from_artist(
+            artist.id,
+            match=match_pattern,
+            unique=unique_bool,
+            filter_func=_is_allowed_domain,
+        )
 
         if not links:
-            print("No links found.")
+            print("No cloud storage links found.")
             return
 
         # Group links by domain for display
@@ -2314,7 +2387,13 @@ def cmd_extract_all_links(ctx: CLIContext, match: str = "", unique: str = "true"
 
         for artist in active_artists:
             try:
-                links = ctx.external_links.extract_links_from_artist(artist.id, match=match_pattern, unique=unique_bool)
+                links = ctx.external_links.extract_links_from_artist(
+                    artist.id,
+                    match=match_pattern,
+                    unique=unique_bool,
+                    filter_func=_is_allowed_domain,
+                )
+
                 if links:
                     all_links.extend(links)
                     links_by_artist[artist.id] = links
@@ -2367,6 +2446,10 @@ def cmd_extract_all_links(ctx: CLIContext, match: str = "", unique: str = "true"
     except Exception as e:
         print(f"✗ Error extracting links: {e}")
 
+
+# ============================================================================
+# Utility Commands
+# ============================================================================
 
 def cmd_history(ctx: CLIContext, limit: str = "10"):
     """Show recent command history
@@ -2450,6 +2533,11 @@ def cmd_history(ctx: CLIContext, limit: str = "10"):
         print(f"Error retrieving history: {e}")
 
 
+def cmd_clear(ctx: CLIContext = None):
+    """Clear screen"""
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+
 def cmd_exit(ctx: CLIContext):
     """Exit program with confirmation"""
     # Check if there are active tasks
@@ -2485,15 +2573,31 @@ def cmd_test(ctx: CLIContext):
 # ============================================================================
 
 COMMAND_MAP = {
+
+    # quick commands
+    'ls': cmd_list_artists,
+    'la': lambda *args, **kargs: cmd_list_artists(*args, **kargs, all="true"),
+
     'help': cmd_help,
+    'history': cmd_history,
+    'tasks': cmd_tasks,
+    'clear': cmd_clear,
+    'exit': cmd_exit,
+    'test': cmd_test,
+
     'add': cmd_add_artist,
     'remove': cmd_remove_artist,
+
     'list': cmd_list_artists,
+    'list-undone': cmd_list_undone,
+    'list-all-undone': cmd_list_all_undone,
+
     'ignore': cmd_ignore_artist,
     'unignore': cmd_unignore_artist,
     'ignore-inactive': cmd_ignore_inactive,
     'complete': cmd_complete_artist,
     'uncomplete': cmd_uncomplete_artist,
+
     'check': cmd_check_artist,
     'check-from': cmd_check_from_date,
     'check-until': cmd_check_until_date,
@@ -2505,29 +2609,27 @@ COMMAND_MAP = {
     'update-all-basic': cmd_update_all_basic,
     'update-cache-full': cmd_update_cache_full,
     'update-all-full': cmd_update_all_full,
+    'cancel-all': cmd_cancel_all,
+
     'clean-post-folders': cmd_clean_post_folders,
     'clean-all-post-folders': cmd_clean_all_post_folders,
+
+    'reset': cmd_reset_artist,
+    'reset-all': cmd_reset_all_artists,
     'reset-conflicts': cmd_reset_conflicts,
     'reset-all-conflicts': cmd_reset_all_conflicts,
+
     'validate': cmd_validate_artist,
     'validate-all': cmd_validate_all_artists,
     'migrate-posts': cmd_migrate_posts,
     'migrate-files': cmd_migrate_files,
-    'reset': cmd_reset_artist,
-    'reset-all': cmd_reset_all_artists,
-    'list-undone': cmd_list_undone,
-    'list-all-undone': cmd_list_all_undone,
     'dedupe': cmd_dedupe_artist,
     'dedupe-all': cmd_dedupe_all_artists,
-    'tasks': cmd_tasks,
-    'cancel-all': cmd_cancel_all,
+
     'config-artist': cmd_config_artist,
     'config-global': cmd_config_global,
     'config-validation': cmd_config_validation,
+
     'extract-links': cmd_extract_links,
     'extract-all-links': cmd_extract_all_links,
-    'history': cmd_history,
-    'clear': cmd_clear,
-    'exit': cmd_exit,
-    # 'test': cmd_test,
 }

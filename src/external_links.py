@@ -1,5 +1,5 @@
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Callable
 from urllib.parse import urlparse
 
 from .cache import Cache
@@ -20,7 +20,8 @@ class ExternalLinksExtractor:
         self,
         artist_id: str,
         match: Optional[str] = None,
-        unique: bool = True
+        unique: bool = True,
+        filter_func: Optional[Callable[[ExternalLink], bool]] = None
     ) -> List[ExternalLink]:
         """Extract links from an artist's cached posts
 
@@ -28,6 +29,7 @@ class ExternalLinksExtractor:
             artist_id: Artist ID
             match: Optional regex pattern to filter URLs
             unique: Whether to return only unique URLs
+            filter_func: Optional function to filter ExternalLink objects
 
         Returns:
             List of ExternalLink objects
@@ -52,7 +54,9 @@ class ExternalLinksExtractor:
                         post_id=post.id,
                         artist_id=artist_id
                     )
-                    links_dict[url] = link
+
+                    if filter_func is None or filter_func(link):
+                        links_dict[url] = link
 
         return list(links_dict.values())
 
