@@ -14,15 +14,39 @@ class DownloaderService(rpyc.Service):
     ctx = None
     ALLOWED_COMMANDS = {'help', 'list', 'tasks'}
 
+    @staticmethod
+    def parse_command(cmd_input: str) -> tuple[str, dict]:
+        """Parse command with parameters (format: command:param1=value1,param2=value2).
+
+        This helper is intentionally static so it can be reused
+        without requiring a service instance.
+        """
+        if ':' not in cmd_input:
+            return (cmd_input, {})
+
+        parts = cmd_input.split(':', 1)
+        command = parts[0].strip()
+        params_str = parts[1].strip()
+
+        params = {}
+        if params_str:
+            for param in params_str.split(','):
+                param = param.strip()
+                if '=' in param:
+                    key, value = param.split('=', 1)
+                    params[key.strip()] = value.strip()
+
+        return (command, params)
+
     def exposed_execute_command(self, cmd_input: str) -> dict:
         """Execute command and return result dict"""
         if not self.ctx:
             return {"error": "Service not initialized"}
 
         try:
-            from .ui import parse_command, COMMAND_MAP
+            from .cmd import COMMAND_MAP
 
-            command, params = parse_command(cmd_input)
+            command, params = self.parse_command(cmd_input)
 
             if command not in self.ALLOWED_COMMANDS:
                 allowed = ', '.join(sorted(self.ALLOWED_COMMANDS))
@@ -155,13 +179,26 @@ class RPCClient:
 
     def run_interactive(self):
         """Run interactive client mode"""
-        from .ui import CommandCompleter
+        from .prompt import CommandCompleter
+
+        # Use the same allowed commands as the service, plus local "exit".
+        # This keeps client-side completion in sync with the RPC whitelist.
+        allowed_commands = sorted(DownloaderService.ALLOWED_COMMANDS | {"exit"})
+
+        def get_rpc_commands():
+            """Return a mapping of available RPC commands for completion.
+
+            CommandCompleter expects a callable that returns a mapping-like
+            object. Only the keys are relevant for completion, so the
+            values can be placeholders.
+            """
+            return {cmd: None for cmd in allowed_commands}
 
         print("[Client Mode] Connected to existing instance")
-        print("Available commands: help, list, tasks, exit")
+        print(f"Available commands: {', '.join(allowed_commands)}")
         print("Note: Interactive commands are not supported in RPC mode\n")
 
-        completer = CommandCompleter(['help', 'list', 'tasks', 'exit'])
+        completer = CommandCompleter(get_rpc_commands)
 
         while True:
             try:

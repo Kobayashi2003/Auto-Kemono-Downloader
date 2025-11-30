@@ -404,16 +404,6 @@ class Downloader:
 
         self.logger.downloader_updating_full(artist=artist.display_name(), count=len(posts))
 
-        # Filter posts that need updating
-        posts_to_update = [
-            (idx, post) for idx, post in enumerate(posts, 1)
-            if not post.content or post.content == NO_CONTENT_MARKER
-        ]
-
-        if not posts_to_update:
-            self.logger.downloader_full_cached(artist=artist.display_name(), updated=0)
-            return 0
-
         updated_count = 0
         lock = threading.Lock()
 
@@ -428,27 +418,71 @@ class Downloader:
                 full_post_response = self.api.get_post_until_success(artist.service, artist.user_id, post.id)
                 full_post = full_post_response['post']
 
-                # Update content
-                fetched_content = full_post.get('content', '')
-                post.content = fetched_content if fetched_content else NO_CONTENT_MARKER
+                changed_for_download = False
 
-                # Also update other fields that might be missing
-                if not post.file:
-                    post.file = full_post.get('file')
-                if not post.attachments:
-                    post.attachments = full_post.get('attachments', [])
-                if not post.embed:
-                    post.embed = full_post.get('embed', {})
+                # --- Content ---
+                if 'content' in full_post:
+                    remote_content = full_post.get('content', '') or ''
+                    local_content = post.content if post.content != NO_CONTENT_MARKER else ''
+                    if remote_content != local_content:
+                        changed_for_download = True
+                    post.content = remote_content if remote_content else NO_CONTENT_MARKER
 
-                return True
+                # --- File ---
+                if 'file' in full_post:
+                    remote_file = full_post.get('file')
+                    local_file = post.file
+
+                    # Treat local as superset: if it does NOT contain the
+                    # remote file (by name/path), we consider it changed and
+                    # update; otherwise we keep local richer data.
+                    if not Utils.sequence_contains_all(
+                        [local_file] if local_file else [],
+                        [remote_file] if remote_file else [],
+                        key_fields=['name', 'path']
+                    ):
+                        changed_for_download = True
+                        post.file = remote_file
+
+                # --- Attachments ---
+                if 'attachments' in full_post:
+                    remote_attachments = full_post.get('attachments', []) or []
+                    local_attachments = post.attachments or []
+
+                    if not Utils.sequence_contains_all(
+                        local_attachments,
+                        remote_attachments,
+                        key_fields=['name', 'path']
+                    ):
+                        changed_for_download = True
+                        post.attachments = remote_attachments
+
+                # --- Metadata fields (do not affect done flag) ---
+                if 'title' in full_post:
+                    post.title = full_post['title']
+                if 'embed' in full_post:
+                    post.embed = full_post['embed']
+                if 'shared_file' in full_post:
+                    post.shared_file = full_post['shared_file']
+                if 'added' in full_post:
+                    post.added = full_post['added']
+                if 'published' in full_post:
+                    post.published = full_post['published']
+                if 'edited' in full_post:
+                    post.edited = full_post['edited']
+
+                if changed_for_download:
+                    post.done = False
+
+                return changed_for_download
 
             except Exception as e:
                 self.logger.downloader_fetch_post_failed(post_id=post.id, error=str(e), level='warning')
                 return False
 
         with ThreadPoolExecutor(max_workers=self.config.max_concurrent_posts) as executor:
-            futures = {executor.submit(update_post, idx_post): idx_post
-                      for idx_post in posts_to_update}
+            futures = {executor.submit(update_post, (idx, post)): (idx, post)
+                      for idx, post in enumerate(posts, 1)}
 
             for future in as_completed(futures):
                 if future.result():
@@ -456,7 +490,7 @@ class Downloader:
                         updated_count += 1
                         # Log progress every 10 posts
                         if updated_count % 10 == 0:
-                            self.logger.downloader_full_update_progress(updated=updated_count, total=len(posts_to_update))
+                            self.logger.downloader_full_update_progress(updated=updated_count, total=len(posts))
 
         # Save updated posts
         self.cache.save_posts(artist.id, posts)

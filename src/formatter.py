@@ -48,8 +48,9 @@ class Formatter:
             title=params.title,
             published=published_str
         )
-        path_sanitized = Formatter._sanitize_path_segments(path_raw)
-        return Path(path_sanitized)
+        # path_sanitized = Formatter._sanitize_path_segments(path_raw)
+        # return Path(path_sanitized)
+        return Formatter._sanitize(path_raw)
 
     # ==================== Level 3: File Name ====================
 

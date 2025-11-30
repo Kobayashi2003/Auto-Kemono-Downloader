@@ -1,17 +1,10 @@
-"""Command implementations for the CLI
-
-This module contains all command handlers that are executed by the run_cli function.
-It imports necessary dependencies from ui.py and other modules.
-
-Hot reload support: This module is reloaded on each command execution, allowing
-modifications to take effect without restarting the application.
-"""
-
 import os
+import re
+import subprocess
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Callable
 
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.document import Document
@@ -2237,60 +2230,105 @@ def cmd_config_validation(ctx: CLIContext):
 
 ALLOWED_DOMAINS = [
     'drive.google.com',   # Google Drive
-    # 'mega.nz',            # MEGA
-    # 'mega.io',            # MEGA alternative
-    # 'dropbox.com',        # Dropbox
-    # 'onedrive.live.com',  # OneDrive
-    # '1drv.ms',            # OneDrive short link
-    # 'mediafire.com',      # MediaFire
-    # 'box.com',            # Box
-    # 'wetransfer.com',     # WeTransfer
-    # 'anonfiles.com',      # AnonFiles
-    # 'pixeldrain.com',     # PixelDrain
-    # 'gofile.io',          # GoFile
-    # 'bayfiles.com',       # BayFiles
-    # 'uploadhaven.com',    # UploadHaven
-    # 'pan.baidu.com',      # Baidu Netdisk
-    # 'cloud.189.cn',       # 189 Cloud (China Telecom)
-    # 'weiyun.com',         # Tencent Weiyun
-    # 'aliyundrive.com',    # Alibaba Cloud Drive
-    # 'alipan.com',         # Alipan (Alibaba)
-    # 'jianguoyun.com',     # Nutstore
-    # '115.com',            # 115 Netdisk
-    # 'lanzou.com',         # Lanzou Cloud
-    # 'lanzoux.com',        # Lanzou alternative
-    # 'lanzoui.com',        # Lanzou alternative
-    # 'gigafile.nu',        # Gigafile
+    'mega.nz',            # MEGA
+    'mega.io',            # MEGA alternative
+    'dropbox.com',        # Dropbox
+    'onedrive.live.com',  # OneDrive
+    '1drv.ms',            # OneDrive short link
+    'mediafire.com',      # MediaFire
+    'box.com',            # Box
+    'wetransfer.com',     # WeTransfer
+    'anonfiles.com',      # AnonFiles
+    'pixeldrain.com',     # PixelDrain
+    'gofile.io',          # GoFile
+    'bayfiles.com',       # BayFiles
+    'uploadhaven.com',    # UploadHaven
+    'pan.baidu.com',      # Baidu Netdisk
+    'cloud.189.cn',       # 189 Cloud (China Telecom)
+    'weiyun.com',         # Tencent Weiyun
+    'aliyundrive.com',    # Alibaba Cloud Drive
+    'alipan.com',         # Alipan (Alibaba)
+    'jianguoyun.com',     # Nutstore
+    '115.com',            # 115 Netdisk
+    'lanzou.com',         # Lanzou Cloud
+    'lanzoux.com',        # Lanzou alternative
+    'lanzoui.com',        # Lanzou alternative
+    'gigafile.nu',        # Gigafile
 ]
 
 
 FILTERED_ARTIST = [
-    # 'fanbox_63665992',
-    # 'fanbox_81970',
-    # 'fanbox_24687177',
-    # 'fanbox_10608235',
-    # 'fanbox_4234383',
-    # 'fanbox_273185',
-    # 'fanbox_25877697',
-    # 'fanbox_490219',
-    # 'fanbox_70050825',
-    # 'fanbox_156352',
-    # 'fanbox_6049901',
-    # 'fanbox_569672',
-    # 'fanbox_9368614',
-    # 'fanbox_16731',
-    # 'fanbox_10344581',
-    # 'fantia_13794',
-    # 'patreon_59240558',
-    # 'patreon_82224513',
-    # 'patreon_69653195',
-    # 'patreon_24294624',
-    # 'patreon_52832561'
+    'fanbox_16731',     # 玉之けだま
+    'fanbox_81970',     # 藤崎ひかり
+    'fanbox_273185',    # 加瀬大輝
+    'fanbox_490219',    # Hiten
+    'fanbox_569672',    # ミルクセーキ
+    'fanbox_3231927',   # AkiFn
+    'fanbox_4234383',   # MUK(むっく)
+    'fanbox_6049901',   # 鬼針草
+    'fanbox_9368614',   # 悪逆無道ナナちゃん
+    'fanbox_10344581',  # 幼月月
+    'fanbox_10608235',  # ゆんみ
+    'fanbox_10829062',  # 苦怕Creep
+    'fanbox_18795644',  # Yanagi
+    'fanbox_24687177',  # しめったねこ
+    'fanbox_25877697',  # JK君
+    'fanbox_50439605',  # カプリコン
+    'fanbox_63665992',  # カブウサギ/KabuUsagi
+    'fanbox_70050825',  # ほうき星
+    'patreon_59240558', # Fujiyama
+    'patreon_82224513', # billy
+    'patreon_69653195', # ほうき星
 ]
 
 
-def _is_allowed_domain(link: ExternalLink) -> bool:
-    return any(d in link.domain or d in link.url for d in ALLOWED_DOMAINS) and link.artist_id not in FILTERED_ARTIST
+def _is_allowed_domain(link: ExternalLink, allowed_domains:  List[str] = ALLOWED_DOMAINS, filtered_artists: List[str] = FILTERED_ARTIST) -> bool:
+    return any(d in link.domain or d in link.url for d in allowed_domains) and link.artist_id not in filtered_artists
+
+
+def _run_link_downloader(urls: list[str], download_func: Callable[[str], None]):
+    total = len(urls)
+    success_count = 0
+    failure_count = 0
+
+    for idx, url in enumerate(urls, start=1):
+        print(f"[{idx}/{total}] Downloading: {url}")
+        try:
+            download_func(url)
+            print("  ✓ Success")
+            success_count += 1
+        except Exception as e:
+            print(f"  ✗ Failed: {e}")
+            failure_count += 1
+
+    print(f"\nDownload complete: {success_count} succeeded, {failure_count} failed.")
+
+
+def _extract_gdrive_id(url: str) -> Optional[str]:
+    """Extract Google Drive file ID from URL"""
+    patterns = [
+        r"/file/d/([^/]+)",                     # /file/d/FILE_ID
+        r"[?&]id=([^&]+)",                      # ?id=FILE_ID or &id=FILE_ID
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _download_gdrive_file(url: str) -> None:
+    file_id = _extract_gdrive_id(url)
+    if not file_id:
+        raise ValueError("Invalid Google Drive URL or unable to extract file ID")
+
+    # Construct the direct download URL
+    download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+
+    base_dir = Path("cloud") / "google_drive" / file_id
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    subprocess.run(["gdown", download_url], cwd=base_dir, check=True)
 
 
 def cmd_extract_links(ctx: CLIContext, match: str = "", unique: str = "true", show_stats: str = "true"):
@@ -2446,6 +2484,40 @@ def cmd_extract_all_links(ctx: CLIContext, match: str = "", unique: str = "true"
     except Exception as e:
         print(f"✗ Error extracting links: {e}")
 
+
+def cmd_download_gdrive_links(ctx: CLIContext, match: str = "", unique: str = "true"):
+    """Download Google Drive links from an artist's cached posts"""
+    artist = select_artist(ctx)
+    if not artist:
+        return
+
+    print(f"\nDownloading Google Drive links from: {artist.display_name()}")
+    print("-" * 80)
+
+    # Parse parameters
+    match_pattern = match.strip() or None
+    unique_bool = str(unique).lower() == "true"
+
+    try:
+        links = ctx.external_links.extract_links_from_artist(
+            artist.id,
+            match=match_pattern,
+            unique=unique_bool,
+            filter_func=lambda link: 'drive.google.com' in link.domain or 'drive.google.com' in link.url,
+        )
+
+        if not links:
+            print("No Google Drive links found.")
+            return
+
+        urls = [link.url for link in links]
+
+        print(f"Found {len(urls)} Google Drive links to download.\n")
+
+        _run_link_downloader(urls, _download_gdrive_file)
+
+    except Exception as e:
+        print(f"✗ Error downloading links: {e}")
 
 # ============================================================================
 # Utility Commands
@@ -2632,4 +2704,5 @@ COMMAND_MAP = {
 
     'extract-links': cmd_extract_links,
     'extract-all-links': cmd_extract_all_links,
+    'download-gdrive-links': cmd_download_gdrive_links,
 }
