@@ -2263,6 +2263,7 @@ FILTERED_ARTIST = [
     'fanbox_273185',    # 加瀬大輝
     'fanbox_490219',    # Hiten
     'fanbox_569672',    # ミルクセーキ
+    'fanbox_1193139',   # HxxG / ホン
     'fanbox_3231927',   # AkiFn
     'fanbox_4234383',   # MUK(むっく)
     'fanbox_6049901',   # 鬼針草
@@ -2279,6 +2280,7 @@ FILTERED_ARTIST = [
     'patreon_59240558', # Fujiyama
     'patreon_82224513', # billy
     'patreon_69653195', # ほうき星
+    'patreon_24217188', # HxxG
 ]
 
 
@@ -2305,10 +2307,13 @@ def _run_link_downloader(urls: list[str], download_func: Callable[[str], None]):
 
 
 def _extract_gdrive_id(url: str) -> Optional[str]:
-    """Extract Google Drive file ID from URL"""
+    """Extract Google Drive file or folder ID from URL"""
     patterns = [
         r"/file/d/([^/]+)",                     # /file/d/FILE_ID
         r"[?&]id=([^&]+)",                      # ?id=FILE_ID or &id=FILE_ID
+        r"/folders/([^/?#]+)",                  # /folders/FOLDER_ID
+        r"/drive/folders/([^/?#]+)",            # /drive/folders/FOLDER_ID
+        r"/embeddedfolderview\?id=([^&]+)",     # embeddedfolderview?id=FOLDER_ID
     ]
     for pattern in patterns:
         match = re.search(pattern, url)
@@ -2317,18 +2322,29 @@ def _extract_gdrive_id(url: str) -> Optional[str]:
     return None
 
 
-def _download_gdrive_file(url: str) -> None:
+def _download_gdrive_link(url: str) -> None:
     file_id = _extract_gdrive_id(url)
     if not file_id:
-        raise ValueError("Invalid Google Drive URL or unable to extract file ID")
-
-    # Construct the direct download URL
-    download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+        raise ValueError("Invalid Google Drive URL or unable to extract file/folder ID")
 
     base_dir = Path("cloud") / "google_drive" / file_id
     base_dir.mkdir(parents=True, exist_ok=True)
 
-    subprocess.run(["gdown", download_url], cwd=base_dir, check=True)
+    # Decide whether this is likely a folder link
+    is_folder = any(p in url for p in [
+        "/folders/",
+        "/drive/folders/",
+        "embeddedfolderview",
+    ])
+
+    if is_folder:
+        # Use gdown folder download
+        folder_url = f"https://drive.google.com/drive/folders/{file_id}"
+        subprocess.run(["gdown", "--folder", folder_url], cwd=base_dir, check=True)
+    else:
+        # Construct the direct download URL for a single file
+        download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+        subprocess.run(["gdown", download_url], cwd=base_dir, check=True)
 
 
 def cmd_extract_links(ctx: CLIContext, match: str = "", unique: str = "true", show_stats: str = "true"):
@@ -2514,7 +2530,7 @@ def cmd_download_gdrive_links(ctx: CLIContext, match: str = "", unique: str = "t
 
         print(f"Found {len(urls)} Google Drive links to download.\n")
 
-        _run_link_downloader(urls, _download_gdrive_file)
+        _run_link_downloader(urls, _download_gdrive_link)
 
     except Exception as e:
         print(f"✗ Error downloading links: {e}")

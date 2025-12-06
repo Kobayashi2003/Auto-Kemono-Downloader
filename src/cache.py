@@ -4,16 +4,20 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .models import Post, Profile
+from .models import Artist, Post, Profile, Config
 from .logger import Logger
+from .filters import PostFilter
+from .storage import Storage
 
 
 class Cache:
-    def __init__(self, cache_dir: str, logger: Logger):
+    def __init__(self, cache_dir: str, logger: Logger, config: Config, storage: Storage):
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(exist_ok=True)
         self.lock = threading.Lock()
         self.logger = logger
+        self.config = config
+        self.storage = storage
 
     def _profile_path(self, artist_id: str) -> Path:
         return self.cache_dir / f"{artist_id}_profile.json"
@@ -81,7 +85,31 @@ class Cache:
 
         try:
             data = json.loads(path.read_text(encoding='utf-8'))
-            return [Post(**item) for item in data]
+            posts = [Post(**item) for item in data]
+
+
+            profile = self._load_profile(artist_id)
+            if not profile:
+                return posts
+
+            artist = self.storage.get_artist(artist_id)
+            if not isinstance(artist, Artist):
+                return posts
+
+            # Merge global and artist-level filters (artist-level takes precedence)
+            filter_config = {**self.config.global_filter, **artist.filter}
+
+            if not filter_config:
+                return posts
+
+            filtered_posts = PostFilter.apply_filters(posts, filter_config)
+
+            # Log if posts were filtered out
+            filtered_count = len(posts) - len(filtered_posts)
+            if filtered_count > 0:
+                self.logger.downloader_filtered_posts(artist=artist.display_name(), filtered=filtered_count)
+
+            return filtered_posts
         except Exception:
             return []
 

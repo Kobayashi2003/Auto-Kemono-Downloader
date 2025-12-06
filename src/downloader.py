@@ -5,7 +5,6 @@ from typing import List, Optional
 
 from .api import API
 from .cache import Cache
-from .filters import PostFilter
 from .formatter import Formatter
 from .logger import Logger
 from .models import Artist, ArtistFolderParams, Config, DownloadArtistResult, DownloadPostResult, DownloadPostsResult, FileParams, NO_CONTENT_MARKER, Post, PostFolderParams
@@ -66,9 +65,6 @@ class Downloader:
                 # Normal mode: only process undone posts
                 posts_to_process = self.cache.get_undone(artist.id)
                 no_posts_msg = "No posts to download"
-
-            # Apply filters (artist-level and global)
-            posts_to_process = self._apply_filters(artist, posts_to_process)
 
             # Process posts or log if none
             if posts_to_process:
@@ -423,9 +419,9 @@ class Downloader:
                 # --- Content ---
                 if 'content' in full_post:
                     remote_content = full_post.get('content', '') or ''
-                    local_content = post.content if post.content != NO_CONTENT_MARKER else ''
-                    if remote_content != local_content:
-                        changed_for_download = True
+                    # local_content = post.content if post.content != NO_CONTENT_MARKER else ''
+                    # if remote_content != local_content:
+                    #     changed_for_download = True
                     post.content = remote_content if remote_content else NO_CONTENT_MARKER
 
                 # --- File ---
@@ -499,24 +495,6 @@ class Downloader:
         return updated_count
 
     # ==================== Utility Methods ====================
-
-    def _apply_filters(self, artist: Artist, posts: List[Post]) -> List[Post]:
-        """Apply filters to posts (artist-level and global)"""
-        # Merge global and artist-level filters (artist-level takes precedence)
-        filter_config = {**self.config.global_filter, **artist.filter}
-
-        if not filter_config:
-            return posts
-
-        # Apply filters
-        filtered_posts = PostFilter.apply_filters(posts, filter_config)
-
-        # Log if posts were filtered out
-        filtered_count = len(posts) - len(filtered_posts)
-        if filtered_count > 0:
-            self.logger.downloader_filtered_posts(artist=artist.display_name(), filtered=filtered_count)
-
-        return filtered_posts
 
     def _calculate_new_last_date(self, artist: Artist) -> Optional[str]:
         """Calculate new last_date based on continuous success"""

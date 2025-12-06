@@ -57,9 +57,23 @@ def check_existing_instance():
     return False
 
 
-def initialize_services(config, logger):
+def initialize_services():
     """Initialize all services in dependency order"""
-    # Proxy configuration
+
+    notifier = Notifier(enabled=False)
+    validator = Validator(data_dir="data")
+    storage = Storage("data")
+    config = storage.load_config()
+    logger = Logger(config.logs_dir)
+    cache = Cache(
+        cache_dir=config.cache_dir,
+        logger=logger,
+        config=config,
+        storage=storage
+    )
+    migrator = Migrator(storage=storage, cache=cache)
+    external_links = ExternalLinksExtractor(cache=cache, logger=logger)
+
     if getattr(config, 'use_proxy', False):
         try:
             proxy_pool = ClashProxyPool(
@@ -79,51 +93,36 @@ def initialize_services(config, logger):
         proxy_pool = NullProxyPool()
         logger.info("Proxy disabled")
 
-    # Initialize services in dependency order
-    cache = Cache(config.cache_dir, logger=logger)
-
     api = API(logger=logger, proxy_pool=proxy_pool)
-
-    notifier = Notifier(enabled=False)
 
     downloader = Downloader(
         config=config,
         logger=logger,
-        storage=None,  # Will be set in main
+        storage=storage,
         cache=cache,
         api=api,
         notifier=notifier
     )
 
     scheduler = Scheduler(
-        storage=None,  # Will be set in main
+        storage=storage,
         downloader=downloader,
         global_timer=config.global_timer,
         max_workers=config.max_concurrent_artists,
         logger=logger
     )
 
-    migrator = Migrator(storage=None, cache=cache)  # Storage will be set in main
-
-    validator = Validator(data_dir="data")
-
-    external_links = ExternalLinksExtractor(cache=cache, logger=logger)
-
-    return api, downloader, scheduler, migrator, validator, external_links, proxy_pool
-
-
-def create_cli_context(storage, scheduler, cache, api, downloader, migrator, validator, external_links):
-    """Create CLI context with all dependencies"""
-    return CLIContext(
-        storage=storage,
-        scheduler=scheduler,
-        cache=cache,
-        api=api,
-        downloader=downloader,
-        migrator=migrator,
-        validator=validator,
-        external_links=external_links
-    )
+    return {
+        "logger": logger,
+        "storage": storage,
+        "scheduler": scheduler,
+        "cache": cache,
+        "api": api,
+        "downloader": downloader,
+        "migrator": migrator,
+        "validator": validator,
+        "external_links": external_links,
+    }
 
 
 def cleanup_services(rpc_server, downloader, scheduler, proxy_pool, logger):
@@ -227,34 +226,28 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # Step 1: Check for existing instance
     if check_existing_instance():
         return
 
-    # Step 2: Initialize core storage and logging
-    storage = Storage("data")
-    config = storage.load_config()
-    logger = Logger(config.logs_dir)
+    services = initialize_services()
 
-    # Step 3: Initialize all services
-    api, downloader, scheduler, migrator, validator, external_links, proxy_pool = initialize_services(config, logger)
+    ctx = CLIContext(
+        storage=services["storage"],
+        scheduler=services["scheduler"],
+        cache=services["cache"],
+        api=services["api"],
+        downloader=services["downloader"],
+        migrator=services["migrator"],
+        validator=services["validator"],
+        external_links=services["external_links"]
+    )
 
-    # Set storage references in services that need it
-    downloader.storage = storage
-    migrator.storage = storage
-    scheduler.storage = storage
-
-    # Step 4: Create CLI context
-    ctx = create_cli_context(storage, scheduler, cache := Cache(config.cache_dir, logger=logger),
-                             api, downloader, migrator, validator, external_links)
-
-    # Step 5: Start RPC server and scheduler
     rpc_server = RPCServer(ctx, port=18861)
 
     try:
         rpc_server.start()
-        scheduler.start()
-        logger.info(f"Started with {len(storage.get_artists())} artists")
+        services["scheduler"].start()
+        services["logger"].info(f"Started with {len(services['storage'].get_artists())} artists")
 
         # Step 6: Run CLI (main loop)
         run_cli(ctx)
@@ -262,7 +255,13 @@ def main():
         print("\nStopping all tasks...")
     finally:
         # Step 7: Cleanup
-        cleanup_services(rpc_server, downloader, scheduler, proxy_pool, logger)
+        cleanup_services(
+            rpc_server,
+            services["downloader"],
+            services["scheduler"],
+            services["api"].proxy_pool,
+            services["logger"]
+        )
 
 
 if __name__ == "__main__":

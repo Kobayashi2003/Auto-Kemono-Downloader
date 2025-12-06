@@ -10,6 +10,7 @@ class Storage:
     def __init__(self, data_dir: str):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
+        self.artists_dir = self.data_dir / "artists"
         self.artists_file = self.data_dir / "artists.json"
         self.config_file = self.data_dir / "config.json"
         self.history_file = self.data_dir / "history.json"
@@ -44,8 +45,39 @@ class Storage:
 
     def get_artists(self) -> List[Artist]:
         with self.lock:
+            # Load base list from artists.json
             data = json.loads(self.artists_file.read_text(encoding='utf-8'))
-            return [Artist(**item) for item in data]
+            artists = [Artist(**item) for item in data]
+
+            # If there is an artists/ directory, recursively load all JSON files
+            if self.artists_dir.exists() and self.artists_dir.is_dir():
+                # Index existing artists by id to allow overrides
+                artists_by_id = {a.id: a for a in artists}
+
+                for json_path in self.artists_dir.rglob('*.json'):
+                    try:
+                        content = json.loads(json_path.read_text(encoding='utf-8'))
+                    except Exception:
+                        continue
+
+                    # Each file can be a single artist object or a list of them
+                    if isinstance(content, dict):
+                        items = [content]
+                    elif isinstance(content, list):
+                        items = [item for item in content if isinstance(item, dict)]
+                    else:
+                        continue
+
+                    for item in items:
+                        artist_id = item.get('id')
+                        if not artist_id:
+                            continue
+                        artist_obj = Artist(**item)
+                        artists_by_id[artist_id] = artist_obj
+
+                artists = list(artists_by_id.values())
+
+            return artists
 
     def get_artist(self, artist_id: str) -> Optional[Artist]:
         artists = self.get_artists()
@@ -82,8 +114,8 @@ class Storage:
         with self.lock:
             data = json.loads(self.history_file.read_text(encoding='utf-8'))
             record = HistoryRecord(
-                command=command, 
-                success=success, 
+                command=command,
+                success=success,
                 artist_id=artist_id,
                 params=params or {},
                 note=note

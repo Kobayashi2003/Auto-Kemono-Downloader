@@ -3,6 +3,7 @@ __pycache__/
 bak/
 temp/
 
+data/artists/
 data/artists.json
 data/config.json
 data/history.json
