@@ -49,10 +49,11 @@ class Storage:
             data = json.loads(self.artists_file.read_text(encoding='utf-8'))
             artists = [Artist(**item) for item in data]
 
-            # If there is an artists/ directory, recursively load all JSON files
+            # If there is an artists/ directory, recursively load all JSON files.
+            # artists.json has the highest priority. For IDs not defined there,
+            # the first occurrence in artists/ (by rglob order) wins.
             if self.artists_dir.exists() and self.artists_dir.is_dir():
-                # Index existing artists by id to allow overrides
-                artists_by_id = {a.id: a for a in artists}
+                existing_ids = {a.id for a in artists}
 
                 for json_path in self.artists_dir.rglob('*.json'):
                     try:
@@ -60,7 +61,6 @@ class Storage:
                     except Exception:
                         continue
 
-                    # Each file can be a single artist object or a list of them
                     if isinstance(content, dict):
                         items = [content]
                     elif isinstance(content, list):
@@ -70,12 +70,10 @@ class Storage:
 
                     for item in items:
                         artist_id = item.get('id')
-                        if not artist_id:
+                        if not artist_id or artist_id in existing_ids:
                             continue
-                        artist_obj = Artist(**item)
-                        artists_by_id[artist_id] = artist_obj
-
-                artists = list(artists_by_id.values())
+                        artists.append(Artist(**item))
+                        existing_ids.add(artist_id)
 
             return artists
 
@@ -85,27 +83,83 @@ class Storage:
 
     def save_artist(self, artist: Artist):
         with self.lock:
+            # 1) Try update in artists.json (highest priority)
             data = json.loads(self.artists_file.read_text(encoding='utf-8'))
             artists = [Artist(**item) for item in data]
 
             for i, a in enumerate(artists):
                 if a.id == artist.id:
                     artists[i] = artist
-                    break
-            else:
-                artists.append(artist)
+                    data = [x.__dict__ for x in artists]
+                    self.artists_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+                    return
 
-            self._write_artists(artists)
+            # 2) Not in artists.json -> search artists/ recursively
+            if self.artists_dir.exists() and self.artists_dir.is_dir():
+                for json_path in self.artists_dir.rglob('*.json'):
+                    try:
+                        content = json.loads(json_path.read_text(encoding='utf-8'))
+                    except Exception:
+                        continue
+
+                    changed = False
+                    if isinstance(content, dict):
+                        if content.get('id') == artist.id:
+                            content = artist.__dict__
+                            changed = True
+                    elif isinstance(content, list):
+                        for idx, item in enumerate(content):
+                            if isinstance(item, dict) and item.get('id') == artist.id:
+                                content[idx] = artist.__dict__
+                                changed = True
+                                break
+
+                    if changed:
+                        json_path.write_text(json.dumps(content, indent=2, ensure_ascii=False), encoding='utf-8')
+                        return
+
+            # 3) Not found anywhere -> append to artists.json
+            artists.append(artist)
+            data = [x.__dict__ for x in artists]
+            self.artists_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
 
     def remove_artist(self, artist_id: str):
         with self.lock:
+            # 1) Try remove from artists.json
             data = json.loads(self.artists_file.read_text(encoding='utf-8'))
-            artists = [Artist(**item) for item in data if item['id'] != artist_id]
-            self._write_artists(artists)
+            artists = [Artist(**item) for item in data]
 
-    def _write_artists(self, artists: List[Artist]):
-        data = [a.__dict__ for a in artists]
-        self.artists_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+            new_artists = [a for a in artists if a.id != artist_id]
+            if len(new_artists) != len(artists):
+                data = [x.__dict__ for x in new_artists]
+                self.artists_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+                return
+
+            # 2) Not in artists.json -> search artists/ recursively
+            if self.artists_dir.exists() and self.artists_dir.is_dir():
+                for json_path in self.artists_dir.rglob('*.json'):
+                    try:
+                        content = json.loads(json_path.read_text(encoding='utf-8'))
+                    except Exception:
+                        continue
+
+                    changed = False
+                    if isinstance(content, dict):
+                        if content.get('id') == artist_id:
+                            content = None
+                            changed = True
+                    elif isinstance(content, list):
+                        original_len = len(content)
+                        content = [item for item in content if not (isinstance(item, dict) and item.get('id') == artist_id)]
+                        changed = len(content) != original_len
+
+                    if changed:
+                        # If the file contained only this artist as a dict, remove file
+                        if content is None:
+                            json_path.unlink(missing_ok=True)
+                        else:
+                            json_path.write_text(json.dumps(content, indent=2, ensure_ascii=False), encoding='utf-8')
+                        return
 
     # ==================== History ====================
 

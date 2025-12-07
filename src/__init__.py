@@ -13,11 +13,11 @@ from .migrator import Migrator
 from .utils import Utils
 from .proxy_pool import ProxyPool, ClashProxyPool, NullProxyPool
 from .rpc_service import RPCServer, RPCClient
-from .external_links import ExternalLinksExtractor
+from .external_links import ExternalLinksExtractor, ExternalLinksDownloader
 
 __all__ = [
     'Storage', 'Cache', 'API', 'Downloader', 'Scheduler', 'Logger', 'Notifier',
     'CLIContext', 'Formatter', 'PostFilter', 'Validator', 'Migrator', 'Utils',
     'ProxyPool', 'ClashProxyPool', 'NullProxyPool', 'RPCServer', 'RPCClient',
-    'ExternalLinksExtractor'
+    'ExternalLinksExtractor', 'ExternalLinksDownloader'
 ]

@@ -1,10 +1,89 @@
 import re
+import subprocess
+from pathlib import Path
 from typing import Dict, List, Optional, Callable
 from urllib.parse import urlparse
 
 from .cache import Cache
 from .logger import Logger
 from .models import ExternalLink
+
+
+class ExternalLinksDownloader:
+    """Download external links (e.g. Google Drive)"""
+
+    def __init__(self, logger: Logger):
+        self.logger = logger
+
+    # ------------------------------------------------------------------
+    # Google Drive helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_allowed_domain(link: ExternalLink, allowed_domains: List[str], filtered_artists: List[str]) -> bool:
+        return any(d in link.domain or d in link.url for d in allowed_domains) and link.artist_id not in filtered_artists
+
+    @staticmethod
+    def _extract_gdrive_id(url: str) -> Optional[str]:
+        """Extract Google Drive file or folder ID from URL"""
+        import re
+
+        patterns = [
+            r"/file/d/([^/]+)",                     # /file/d/FILE_ID
+            r"[?&]id=([^&]+)",                      # ?id=FILE_ID or &id=FILE_ID
+            r"/folders/([^/?#]+)",                  # /folders/FOLDER_ID
+            r"/drive/folders/([^/?#]+)",            # /drive/folders/FOLDER_ID
+            r"/embeddedfolderview\?id=([^&]+)",     # embeddedfolderview?id=FOLDER_ID
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return match.group(1)
+        return None
+
+    def _download_single_gdrive(self, url: str) -> None:
+        file_id = self._extract_gdrive_id(url)
+        if not file_id:
+            raise ValueError("Invalid Google Drive URL or unable to extract file/folder ID")
+
+        base_dir = Path("cloud") / "google_drive" / file_id
+        base_dir.mkdir(parents=True, exist_ok=True)
+
+        is_folder = any(p in url for p in [
+            "/folders/",
+            "/drive/folders/",
+            "embeddedfolderview",
+        ])
+
+        if is_folder:
+            folder_url = f"https://drive.google.com/drive/folders/{file_id}"
+            subprocess.run(["gdown", "--folder", folder_url], cwd=base_dir, check=True)
+        else:
+            download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+            subprocess.run(["gdown", download_url], cwd=base_dir, check=True)
+
+    def _run_link_downloader(self, urls: List[str], download_func: Callable[[str], None]) -> None:
+        total = len(urls)
+        success_count = 0
+        failure_count = 0
+
+        for idx, url in enumerate(urls, start=1):
+            print(f"[{idx}/{total}] Downloading: {url}")
+            try:
+                download_func(url)
+                print("  ✓ Success")
+                success_count += 1
+            except Exception as e:
+                print(f"  ✗ Failed: {e}")
+                failure_count += 1
+
+        print(f"\nDownload complete: {success_count} succeeded, {failure_count} failed.")
+
+    def download_gdrive_links(self, urls: List[str]) -> None:
+        """Download a list of Google Drive URLs (files or folders)."""
+        if not urls:
+            return
+        self._run_link_downloader(urls, self._download_single_gdrive)
 
 
 class ExternalLinksExtractor:

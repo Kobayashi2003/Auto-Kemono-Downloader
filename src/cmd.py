@@ -1,10 +1,8 @@
 import os
-import re
-import subprocess
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Callable
+from typing import Optional
 
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.document import Document
@@ -20,7 +18,7 @@ from .cache import Cache
 from .api import API
 from .downloader import Downloader
 from .migrator import Migrator
-from .external_links import ExternalLinksExtractor
+from .external_links import ExternalLinksExtractor, ExternalLinksDownloader
 
 
 # ============================================================================
@@ -31,7 +29,8 @@ class CLIContext:
     """CLI context containing all dependencies"""
 
     def __init__(self, storage: Storage, scheduler: Scheduler, cache: Cache, api: API,
-                 downloader: Downloader, migrator: Migrator, validator: Validator, external_links: ExternalLinksExtractor):
+                 downloader: Downloader, migrator: Migrator, validator: Validator,
+                 external_links_extractor: ExternalLinksExtractor, external_links_downloader: ExternalLinksDownloader):
         self.api = api
         self.cache = cache
         self.storage = storage
@@ -39,7 +38,8 @@ class CLIContext:
         self.scheduler = scheduler
         self.migrator = migrator
         self.validator = validator
-        self.external_links = external_links
+        self.external_links_extractor = external_links_extractor
+        self.external_links_downloader = external_links_downloader
         self._last_selected_artist: Optional[str] = None
         self._prefilled_artist_id: Optional[str] = None
 
@@ -2282,71 +2282,6 @@ FILTERED_ARTIST = [
     'patreon_69653195', # ほうき星
     'patreon_24217188', # HxxG
 ]
-
-
-def _is_allowed_domain(link: ExternalLink, allowed_domains:  List[str] = ALLOWED_DOMAINS, filtered_artists: List[str] = FILTERED_ARTIST) -> bool:
-    return any(d in link.domain or d in link.url for d in allowed_domains) and link.artist_id not in filtered_artists
-
-
-def _run_link_downloader(urls: list[str], download_func: Callable[[str], None]):
-    total = len(urls)
-    success_count = 0
-    failure_count = 0
-
-    for idx, url in enumerate(urls, start=1):
-        print(f"[{idx}/{total}] Downloading: {url}")
-        try:
-            download_func(url)
-            print("  ✓ Success")
-            success_count += 1
-        except Exception as e:
-            print(f"  ✗ Failed: {e}")
-            failure_count += 1
-
-    print(f"\nDownload complete: {success_count} succeeded, {failure_count} failed.")
-
-
-def _extract_gdrive_id(url: str) -> Optional[str]:
-    """Extract Google Drive file or folder ID from URL"""
-    patterns = [
-        r"/file/d/([^/]+)",                     # /file/d/FILE_ID
-        r"[?&]id=([^&]+)",                      # ?id=FILE_ID or &id=FILE_ID
-        r"/folders/([^/?#]+)",                  # /folders/FOLDER_ID
-        r"/drive/folders/([^/?#]+)",            # /drive/folders/FOLDER_ID
-        r"/embeddedfolderview\?id=([^&]+)",     # embeddedfolderview?id=FOLDER_ID
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, url)
-        if match:
-            return match.group(1)
-    return None
-
-
-def _download_gdrive_link(url: str) -> None:
-    file_id = _extract_gdrive_id(url)
-    if not file_id:
-        raise ValueError("Invalid Google Drive URL or unable to extract file/folder ID")
-
-    base_dir = Path("cloud") / "google_drive" / file_id
-    base_dir.mkdir(parents=True, exist_ok=True)
-
-    # Decide whether this is likely a folder link
-    is_folder = any(p in url for p in [
-        "/folders/",
-        "/drive/folders/",
-        "embeddedfolderview",
-    ])
-
-    if is_folder:
-        # Use gdown folder download
-        folder_url = f"https://drive.google.com/drive/folders/{file_id}"
-        subprocess.run(["gdown", "--folder", folder_url], cwd=base_dir, check=True)
-    else:
-        # Construct the direct download URL for a single file
-        download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
-        subprocess.run(["gdown", download_url], cwd=base_dir, check=True)
-
-
 def cmd_extract_links(ctx: CLIContext, match: str = "", unique: str = "true", show_stats: str = "true"):
     """Extract external links from an artist's cached posts"""
     artist = select_artist(ctx)
@@ -2362,11 +2297,11 @@ def cmd_extract_links(ctx: CLIContext, match: str = "", unique: str = "true", sh
     show_stats_bool = str(show_stats).lower() == "true"
 
     try:
-        links = ctx.external_links.extract_links_from_artist(
+        links = ctx.external_links_extractor.extract_links_from_artist(
             artist.id,
             match=match_pattern,
             unique=unique_bool,
-            filter_func=_is_allowed_domain,
+            filter_func=lambda link: ExternalLinksDownloader._is_allowed_domain(link, ALLOWED_DOMAINS, FILTERED_ARTIST),
         )
 
         if not links:
@@ -2397,7 +2332,7 @@ def cmd_extract_links(ctx: CLIContext, match: str = "", unique: str = "true", sh
             print("Statistics:")
             print("-" * 80)
 
-            stats = ctx.external_links.get_link_statistics(links)
+            stats = ctx.external_links_extractor.get_link_statistics(links)
             print(f"Total links: {stats['total_links']}")
             print(f"Unique domains: {stats['unique_domains']}")
             print(f"Posts with links: {stats['unique_posts']}")
@@ -2441,11 +2376,11 @@ def cmd_extract_all_links(ctx: CLIContext, match: str = "", unique: str = "true"
 
         for artist in active_artists:
             try:
-                links = ctx.external_links.extract_links_from_artist(
+                links = ctx.external_links_extractor.extract_links_from_artist(
                     artist.id,
                     match=match_pattern,
                     unique=unique_bool,
-                    filter_func=_is_allowed_domain,
+                    filter_func=lambda link: ExternalLinksDownloader._is_allowed_domain(link, ALLOWED_DOMAINS, FILTERED_ARTIST),
                 )
 
                 if links:
@@ -2482,7 +2417,7 @@ def cmd_extract_all_links(ctx: CLIContext, match: str = "", unique: str = "true"
             print("Statistics:")
             print("-" * 80)
 
-            stats = ctx.external_links.get_link_statistics(all_links)
+            stats = ctx.external_links_extractor.get_link_statistics(all_links)
             print(f"Total links: {stats['total_links']}")
             print(f"Unique domains: {stats['unique_domains']}")
             print(f"Posts with links: {stats['unique_posts']}")
@@ -2515,7 +2450,7 @@ def cmd_download_gdrive_links(ctx: CLIContext, match: str = "", unique: str = "t
     unique_bool = str(unique).lower() == "true"
 
     try:
-        links = ctx.external_links.extract_links_from_artist(
+        links = ctx.external_links_extractor.extract_links_from_artist(
             artist.id,
             match=match_pattern,
             unique=unique_bool,
@@ -2530,7 +2465,7 @@ def cmd_download_gdrive_links(ctx: CLIContext, match: str = "", unique: str = "t
 
         print(f"Found {len(urls)} Google Drive links to download.\n")
 
-        _run_link_downloader(urls, _download_gdrive_link)
+        ctx.external_links_downloader.download_gdrive_links(urls)
 
     except Exception as e:
         print(f"✗ Error downloading links: {e}")

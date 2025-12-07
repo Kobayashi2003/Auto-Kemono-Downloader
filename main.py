@@ -8,6 +8,7 @@ from src import (
     CLIContext,
     ClashProxyPool,
     Downloader,
+    ExternalLinksDownloader,
     ExternalLinksExtractor,
     Logger,
     Migrator,
@@ -72,7 +73,8 @@ def initialize_services():
         storage=storage
     )
     migrator = Migrator(storage=storage, cache=cache)
-    external_links = ExternalLinksExtractor(cache=cache, logger=logger)
+    external_links_extractor = ExternalLinksExtractor(cache=cache, logger=logger)
+    external_links_downloader = ExternalLinksDownloader(logger=logger)
 
     if getattr(config, 'use_proxy', False):
         try:
@@ -121,7 +123,8 @@ def initialize_services():
         "downloader": downloader,
         "migrator": migrator,
         "validator": validator,
-        "external_links": external_links,
+        "external_links_extractor": external_links_extractor,
+        "external_links_downloader": external_links_downloader,
     }
 
 
@@ -239,7 +242,8 @@ def main():
         downloader=services["downloader"],
         migrator=services["migrator"],
         validator=services["validator"],
-        external_links=services["external_links"]
+        external_links_extractor=services["external_links_extractor"],
+        external_links_downloader=services["external_links_downloader"],
     )
 
     rpc_server = RPCServer(ctx, port=18861)
