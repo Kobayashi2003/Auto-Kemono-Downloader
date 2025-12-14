@@ -20,8 +20,9 @@ class ExternalLinksDownloader:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _is_allowed_domain(link: ExternalLink, allowed_domains: List[str], filtered_artists: List[str]) -> bool:
-        return any(d in link.domain or d in link.url for d in allowed_domains) and link.artist_id not in filtered_artists
+    def _is_allowed_domain(link: ExternalLink, allowed_domains: List[str], filtered_artists: List[str], filtered_artists_cutoff_date: Optional[str]) -> bool:
+        link_date = link.post_edited or link.post_published
+        return any(d in link.domain or d in link.url for d in allowed_domains) and (link.artist_id not in filtered_artists or (filtered_artists_cutoff_date and link_date and link_date > filtered_artists_cutoff_date))
 
     @staticmethod
     def _extract_gdrive_id(url: str) -> Optional[str]:
@@ -131,6 +132,9 @@ class ExternalLinksExtractor:
                         domain=domain,
                         protocol=protocol,
                         post_id=post.id,
+                        post_title=post.title,
+                        post_published=post.published,
+                        post_edited=post.edited,
                         artist_id=artist_id
                     )
 

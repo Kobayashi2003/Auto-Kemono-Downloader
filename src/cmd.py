@@ -478,6 +478,22 @@ def cmd_unignore_artist(ctx: CLIContext):
     print(f"Removed ignore flag for: {artist.display_name()}")
     print("This artist will be included in scheduled tasks")
 
+def cmd_unignore_all(ctx: CLIContext):
+    """Unignore all artists"""
+    artists = ctx.storage.get_artists()
+    ignored_artists = [a for a in artists if a.ignore]
+
+    if not ignored_artists:
+        print("No ignored artists found")
+        return
+
+    for artist in ignored_artists:
+        artist.ignore = False
+        ctx.storage.save_artist(artist)
+        print(f"Removed ignore flag for: {artist.display_name()}")
+
+    print(f"\nTotal unignored: {len(ignored_artists)} artists")
+    print("These artists will be included in scheduled tasks")
 
 def cmd_complete_artist(ctx: CLIContext):
     """Mark as completed"""
@@ -502,6 +518,22 @@ def cmd_uncomplete_artist(ctx: CLIContext):
     print(f"Removed completed flag for: {artist.display_name()}")
     print("This artist will be included in downloads")
 
+def cmd_uncomplete_all(ctx: CLIContext):
+    """Unmark all completed artists"""
+    artists = ctx.storage.get_artists()
+    completed_artists = [a for a in artists if a.completed]
+
+    if not completed_artists:
+        print("No completed artists found")
+        return
+
+    for artist in completed_artists:
+        artist.completed = False
+        ctx.storage.save_artist(artist)
+        print(f"Removed completed flag for: {artist.display_name()}")
+
+    print(f"\nTotal uncompleted: {len(completed_artists)} artists")
+    print("These artists will be included in downloads")
 
 def cmd_ignore_inactive(ctx: CLIContext, months: str = "6"):
     """Ignore artists that have had no updates for N months.
@@ -2223,7 +2255,6 @@ def cmd_config_validation(ctx: CLIContext):
         print("Cancelled")
 
 
-
 # ============================================================================
 # External Links Commands
 # ============================================================================
@@ -2258,8 +2289,11 @@ ALLOWED_DOMAINS = [
 
 
 FILTERED_ARTIST = [
+    'fanbox_6240',      # かろちー
+    'fantia_13794',     # モチ
     'fanbox_16731',     # 玉之けだま
     'fanbox_81970',     # 藤崎ひかり
+    'fanbox_156352',    # DJheycha
     'fanbox_273185',    # 加瀬大輝
     'fanbox_490219',    # Hiten
     'fanbox_569672',    # ミルクセーキ
@@ -2268,6 +2302,7 @@ FILTERED_ARTIST = [
     'fanbox_4234383',   # MUK(むっく)
     'fanbox_6049901',   # 鬼針草
     'fanbox_9368614',   # 悪逆無道ナナちゃん
+    'fanbox_9965434',   # Gemba🔞
     'fanbox_10344581',  # 幼月月
     'fanbox_10608235',  # ゆんみ
     'fanbox_10829062',  # 苦怕Creep
@@ -2277,11 +2312,21 @@ FILTERED_ARTIST = [
     'fanbox_50439605',  # カプリコン
     'fanbox_63665992',  # カブウサギ/KabuUsagi
     'fanbox_70050825',  # ほうき星
+    'fanbox_97717527',  # 立つ屋(Tatsuya)
+    'patreon_24294624', # Zutta
+    'patreon_52832561', # NaNa chan
+    'patreon_53350404', # hagiwork
     'patreon_59240558', # Fujiyama
     'patreon_82224513', # billy
     'patreon_69653195', # ほうき星
     'patreon_24217188', # HxxG
+    'patreon_111295903',# KabuUsagi/カブウサギ
 ]
+
+
+FILTERED_ARTIST_CUTOFF_DATE = "2025-12-14"
+
+
 def cmd_extract_links(ctx: CLIContext, match: str = "", unique: str = "true", show_stats: str = "true"):
     """Extract external links from an artist's cached posts"""
     artist = select_artist(ctx)
@@ -2301,7 +2346,7 @@ def cmd_extract_links(ctx: CLIContext, match: str = "", unique: str = "true", sh
             artist.id,
             match=match_pattern,
             unique=unique_bool,
-            filter_func=lambda link: ExternalLinksDownloader._is_allowed_domain(link, ALLOWED_DOMAINS, FILTERED_ARTIST),
+            filter_func=lambda link: ExternalLinksDownloader._is_allowed_domain(link, ALLOWED_DOMAINS, FILTERED_ARTIST, FILTERED_ARTIST_CUTOFF_DATE),
         )
 
         if not links:
@@ -2323,8 +2368,9 @@ def cmd_extract_links(ctx: CLIContext, match: str = "", unique: str = "true", sh
         idx = 1
         for domain in sorted(links_by_domain.keys()):
             domain_links = links_by_domain[domain]
+            domain_links.sort(key=lambda l: l.post_edited or l.post_date or "", reverse=True)
             for link in domain_links:
-                print(f"{idx:3}. [{link.post_id}] {link.url}")
+                print(f"{idx:3}. [{link.post_edited or link.post_date or ''}][{link.post_id}] {link.url}")
                 idx += 1
 
         if show_stats_bool:
@@ -2380,7 +2426,7 @@ def cmd_extract_all_links(ctx: CLIContext, match: str = "", unique: str = "true"
                     artist.id,
                     match=match_pattern,
                     unique=unique_bool,
-                    filter_func=lambda link: ExternalLinksDownloader._is_allowed_domain(link, ALLOWED_DOMAINS, FILTERED_ARTIST),
+                    filter_func=lambda link: ExternalLinksDownloader._is_allowed_domain(link, ALLOWED_DOMAINS, FILTERED_ARTIST, FILTERED_ARTIST_CUTOFF_DATE),
                 )
 
                 if links:
@@ -2405,10 +2451,11 @@ def cmd_extract_all_links(ctx: CLIContext, match: str = "", unique: str = "true"
                 continue
 
             artist_links = links_by_artist[artist.id]
+            artist_links.sort(key=lambda l: l.post_published or l.post_edited or "", reverse=True)
             print(f"\n{artist.display_name()} [{artist.id}] ({len(artist_links)} links):")
 
             for link in artist_links:
-                print(f"  {idx:3}. [{link.post_id}] {link.url}")
+                print(f"  {idx:3}. [{link.post_published or link.post_edited or ''}][{link.post_id}] {link.url}")
                 idx += 1
 
         if show_stats_bool:
@@ -2469,6 +2516,7 @@ def cmd_download_gdrive_links(ctx: CLIContext, match: str = "", unique: str = "t
 
     except Exception as e:
         print(f"✗ Error downloading links: {e}")
+
 
 # ============================================================================
 # Utility Commands
@@ -2617,9 +2665,11 @@ COMMAND_MAP = {
 
     'ignore': cmd_ignore_artist,
     'unignore': cmd_unignore_artist,
+    'unignore-all': cmd_unignore_all,
     'ignore-inactive': cmd_ignore_inactive,
     'complete': cmd_complete_artist,
     'uncomplete': cmd_uncomplete_artist,
+    'uncomplete-all': cmd_uncomplete_all,
 
     'check': cmd_check_artist,
     'check-from': cmd_check_from_date,

@@ -77,7 +77,7 @@ class Cache:
         with self.lock:
             self._save_posts(artist_id, posts)
 
-    def _load_posts(self, artist_id: str) -> List[Post]:
+    def _load_posts(self, artist_id: str, apply_filters: bool = True) -> List[Post]:
         """Internal: Load posts without lock (not thread-safe)"""
         path = self._posts_path(artist_id)
         if not path.exists():
@@ -87,6 +87,8 @@ class Cache:
             data = json.loads(path.read_text(encoding='utf-8'))
             posts = [Post(**item) for item in data]
 
+            if not apply_filters:
+                return posts
 
             profile = self._load_profile(artist_id)
             if not profile:
@@ -113,9 +115,9 @@ class Cache:
         except Exception:
             return []
 
-    def load_posts(self, artist_id: str) -> List[Post]:
+    def load_posts(self, artist_id: str, apply_filters: bool = True) -> List[Post]:
         with self.lock:
-            return self._load_posts(artist_id)
+            return self._load_posts(artist_id, apply_filters)
 
     def update_post(self, artist_id: str, post_id: str, done: bool, failed_files: List[str] = None, content: str = None):
         with self.lock:

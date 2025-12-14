@@ -437,4 +437,7 @@ class ExternalLink:
     domain: str
     protocol: str
     post_id: str
+    post_title: str
+    post_published: str
+    post_edited: Optional[str]
     artist_id: str

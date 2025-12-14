@@ -140,10 +140,6 @@ class ClashProxyPool(ProxyPool):
 
         super().__init__(proxies)
 
-        if proxies:
-            time.sleep(3)
-            self._log(f"Started {len(proxies)} Clash instances")
-
     def _get_available_proxies(self, config: dict) -> List[dict]:
         """Get available proxies with configurable filter"""
         proxies = config.get('proxies', [])

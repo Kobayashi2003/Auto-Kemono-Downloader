@@ -298,7 +298,25 @@ class Downloader:
         )
 
     def update_posts_basic(self, artist: Artist) -> bool:
-        """Update basic post information (list) if there are new posts. Returns True if cache was updated."""
+        """Update basic post information (list) if there are new posts.
+
+        Notes:
+        - Due to backend limitations, the "list all posts" API cannot reliably return
+            per-post `edited` and `content`. That means when we only call this API, we
+            cannot accurately tell whether an *existing* cached post has been updated.
+        - Therefore, `update_posts_basic` is intentionally designed to only determine
+            whether a post exists (by id) and to refresh basic metadata; it does *not*
+            attempt to detect updates.
+        - Update detection is delegated to `update_posts_full`, which fetches posts
+            one-by-one and can be very slow for many artists.
+        - For this reason, `download_artist` uses basic updates by default, which
+            implies it will not re-download posts that already exist in cache but whose
+            content was updated remotely. If you need to pick up updated old posts,
+            run a full cache update first (e.g. `update_all_full`).
+
+        Returns True if cache was updated.
+        """
+
         # Check stop flag
         if self._stop_flag.is_set():
             return False
@@ -315,7 +333,8 @@ class Downloader:
         current_count = profile_data['post_count']
 
         # Check if we need to update
-        cached_posts = self.cache.load_posts(artist.id)
+        cached_posts = self.cache.load_posts(artist.id, apply_filters=False)
+        is_new_artist = len(cached_posts) == 0
         has_new = self.cache.has_new(artist.id, current_count)
         has_lost = len(cached_posts) != current_count
         needs_update = has_new or has_lost
@@ -359,8 +378,15 @@ class Downloader:
                 done=False
             )
 
-            # Apply last_date rule only to new posts
-            if artist.last_date and new_post.published <= artist.last_date:
+            # Apply last_date rule only to new artists.
+            #
+            # Reason: when tracking an existing artist, the service may later surface
+            # older posts (backfill). If we applied last_date universally, those newly
+            # discovered old posts would be marked done immediately and skipped.
+            #
+            # If you *want* that behavior (treat anything <= last_date as done even for
+            # existing artists), remove the `is_new_artist` condition.
+            if is_new_artist and artist.last_date and new_post.published <= artist.last_date:
                 new_post.done = True
             else:
                 new_count += 1
@@ -392,8 +418,7 @@ class Downloader:
         self.update_posts_basic(artist)
 
         # Load posts for full update
-        posts = self.cache.load_posts(artist.id)
-
+        posts = self.cache.load_posts(artist.id, apply_filters=False)
         if not posts:
             self.logger.downloader_no_posts(artist=artist.display_name())
             return 0
