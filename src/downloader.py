@@ -1,4 +1,5 @@
 import threading
+from functools import reduce
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional
@@ -330,25 +331,28 @@ class Downloader:
             return False
 
         profile_data = self.api.get_profile_until_success(artist.service, artist.user_id)
-        current_count = profile_data['post_count']
+        newest_count = profile_data['post_count']
 
-        # Check if we need to update
         cached_posts = self.cache.load_posts(artist.id, apply_filters=False)
-        is_new_artist = len(cached_posts) == 0
-        has_new = self.cache.has_new(artist.id, current_count)
-        has_lost = len(cached_posts) != current_count
-        needs_update = has_new or has_lost
+        current_count = len(cached_posts)
 
-        if not needs_update:
+        if newest_count == current_count:
             self.logger.downloader_no_new_posts(artist=artist.display_name())
             return False
 
-        self.logger.downloader_updating_cache(artist=artist.display_name())
-        self.cache.save_profile(artist.id, profile_data)
-
-        # Load existing posts to preserve status
-        existing_posts_map = {p.id: p for p in cached_posts}
         all_posts_data = self.api.get_all_posts(artist.service, artist.user_id)
+        all_posts_data = reduce(
+            lambda acc, x: acc if any(d['id'] == x['id'] for d in acc) else acc + [x],
+            all_posts_data,
+            []
+        )
+
+        if len(all_posts_data) == current_count:
+            self.logger.downloader_no_new_posts(artist=artist.display_name())
+            return False
+
+        existing_posts_map = {p.id: p for p in cached_posts}
+        is_new_artist = current_count == 0
 
         merged_posts = []
         new_count = 0
