@@ -1,3 +1,4 @@
+from urllib.parse import urlparse, unquote
 from src.models import FileParams, PostFolderParams, ArtistFolderParams
 
 
@@ -29,13 +30,19 @@ def format_file_plugin(func):
     Logic: truncate original name to 20 chars (keep idx).
     """
     def wrapper(params: FileParams, template: str):
-        # result = func(params, template)
-        # ext = '.' + result.rsplit('.', 1)[-1] if '.' in result else ''
-        # name_only = result.rsplit('.', 1)[0] if '.' in result else result
-        # if len(name_only) > 20:
-        #     name_only = name_only[:10]
-        # if len(ext) > 10:
-        #     ext = ext[:10]
-        # return name_only + ext
+
+        # when the params.name is a URL, extract the filename from the URL
+        if params.name.startswith("http://") or params.name.startswith("https://"):
+            parsed_url = urlparse(params.name)
+            filename = unquote(parsed_url.path.split("/")[-1])[-20:] # get last 20 chars of filename
+
+            if '.' not in filename:
+                if params.name.startswith("https://www.patreon.com/media-u/"):
+                    filename = filename + ".jpg"
+                else:
+                    filename = filename + ".bin"
+
+            params = FileParams(params.idx, filename)
+
         return func(params, template)
     return wrapper
